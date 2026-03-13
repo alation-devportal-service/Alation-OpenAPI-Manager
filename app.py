@@ -185,16 +185,23 @@ def main():
         # STEP 3: ACTIONS
         st.divider()
         st.subheader("🚀 3. Choose Action")
-        tab1, tab2 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe"])
+        tab1, tab2 = st.tabs(["🔍 Validate Only (PR Review)", "☁️ Upload to ReadMe (Release)"])
+        
+        # We still use npx for swagger-cli because it's not in requirements.txt
+        # but we use DIRECT 'rdme' for the rest
         npx = shutil.which("npx")
         
         with tab1:
-            if st.button("Run Validations"):
+            if st.button("Run Validations Only"):
                 prepped = prep_openapi_file(selected_file_path, target_version)
                 abs_cwd = str(prepped.parent.resolve())
                 st.write("### 🔍 Logs")
+                
+                # Swagger still uses npx
                 execute_command([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
-                execute_command([npx, "--yes", "rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
+                
+                # ReadMe now uses the DIRECT command
+                execute_command(["rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
 
         with tab2:
             if st.button("Validate & Upload", type="primary"):
@@ -202,26 +209,25 @@ def main():
                 abs_cwd = str(prepped.parent.resolve())
                 st.write("### 🔍 Logs")
                 
-                # Run Validations
+                # 1. Validate
                 s1 = execute_command([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
-                s2 = execute_command([npx, "--yes", "rdme", "--", "openapi:validate", prepped.name], cwd=abs_cwd)
+                s2 = execute_command(["rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
                 
                 if s1 == 0 and s2 == 0:
-                    st.success("✅ Validations passed. Uploading...")
+                    st.success("✅ Validations passed. Uploading to Refactored Branch...")
                     
-                    # The -- separator is crucial to stop npx from merging 'openapi' and the filename
+                    # 2. Upload using the direct 'rdme' command
+                    # This is the standard syntax for ReadMe Refactored branches
                     upload_cmd = [
-                        npx, "--yes", "rdme", "--", 
-                        "openapi", prepped.name, 
+                        "rdme", "openapi", prepped.name, 
                         "--key", readme_key, 
                         "--id", final_id, 
                         "--version", target_version
                     ]
                     
                     if execute_command(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
-                        st.success("🎉 Upload Successful!")
+                        st.success(f"🎉 Successfully uploaded to ReadMe branch: `{target_version}`")
                     else:
-                        st.error("❌ Upload Failed. If the error is 'command not found', the CLI is misinterpreting the --id flag.")
-
+                        st.error("❌ Upload Failed. Check the logs above for the ReadMe API response.")
 if __name__ == "__main__":
     main()
