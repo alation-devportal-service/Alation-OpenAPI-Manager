@@ -259,9 +259,22 @@ def main():
                 else:
                     st.success("✅ Validations passed! Starting Upload...")
                     
-                    # EXACT MATCH UPLOAD USING --id
-                    upload_cmd = [npx, "rdme@latest", "openapi", filename, "--key", readme_key, "--id", final_id, "--version", target_version]
-                    up_code, up_logs = run_cmd(upload_cmd, cwd=abs_cwd)
+                    # EXACT MATCH UPLOAD USING shell=True (Bypasses array parsing issues)
+                    raw_cmd = f"{npx} --yes rdme@latest openapi {filename} --key {readme_key} --id {final_id} --version {target_version}"
+                    
+                    st.write(f"*> Running: {raw_cmd.replace(readme_key, '***')}*")
+                    
+                    process = subprocess.Popen(raw_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=abs_cwd)
+                    up_logs_list = []
+                    
+                    for line in process.stdout:
+                        safe_line = line.replace(readme_key, "***")
+                        st.text(safe_line.strip())
+                        up_logs_list.append(safe_line.strip())
+                        
+                    process.wait()
+                    up_code = process.returncode
+                    up_logs = "\n".join(up_logs_list)
                     
                     if up_code == 0:
                         st.success(f"🎉 Successfully uploaded `{filename}` to ReadMe container `{final_id}`!")
