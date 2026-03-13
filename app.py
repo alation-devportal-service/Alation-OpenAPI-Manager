@@ -77,21 +77,34 @@ def ensure_node_installed():
     os.environ["PATH"] = f"{str(node_bin_path.absolute())}{os.pathsep}{os.environ['PATH']}"
 
 # --- HELPER FUNCTIONS ---
-def run_cmd(cmd_list, cwd=None, hide_cmd=False):
-    if not hide_cmd:
-        st.write(f"*> Running: {' '.join(cmd_list)}*")
+def run_cmd_safe(cmd_list, cwd=None, mask_secrets=[]):
+    """
+    Standard command runner that prints to UI but masks secrets.
+    """
+    cmd_str = " ".join(cmd_list)
+    for s in mask_secrets:
+        if s: cmd_str = cmd_str.replace(s, "***")
     
-    process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd)
-    output = []
+    st.write(f"*> Running: {cmd_str}*")
     
+    process = subprocess.Popen(
+        cmd_list, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, 
+        text=True, 
+        cwd=cwd
+    )
+    
+    output_lines = []
     for line in process.stdout:
-        safe_line = line.replace(st.secrets.get("GIT_TOKEN", ""), "***").replace(st.secrets.get("README_API_KEY", ""), "***")
-        if not hide_cmd:
-            st.text(safe_line.strip())
-        output.append(safe_line.strip())
-        
+        clean_line = line.strip()
+        for s in mask_secrets:
+            if s: clean_line = clean_line.replace(s, "***")
+        st.text(clean_line)
+        output_lines.append(clean_line)
+    
     process.wait()
-    return process.returncode, "\n".join(output)
+    return process.returncode, "\n".join(output_lines)
 
 def prep_openapi_file(filepath, version):
     with open(filepath, "r") as f: data = yaml.safe_load(f)
@@ -112,18 +125,6 @@ def prep_openapi_file(filepath, version):
 
     with open(filepath, "w") as f: yaml.dump(data, f, sort_keys=False)
     return filepath
-
-def execute_validations(npx, filename, abs_cwd, do_swag, do_redoc, do_readme):
-    st.write("### 🔍 Validation Logs")
-    failed = False
-    if do_swag:
-        if run_cmd([npx, "--yes", "swagger-cli", "validate", filename], cwd=abs_cwd)[0] != 0: failed = True
-    if do_redoc:
-        if run_cmd([npx, "--yes", "@redocly/cli@1.25.0", "lint", filename], cwd=abs_cwd)[0] != 0: failed = True
-    if do_readme:
-        # Using -- to separate npx from rdme arguments
-        if run_cmd([npx, "--yes", "rdme", "--", "openapi:validate", filename], cwd=abs_cwd)[0] != 0: failed = True
-    return not failed
 
 # --- MAIN APP ---
 def main():
@@ -147,6 +148,7 @@ def main():
         st.divider()
         st.caption(f"🔒 App is securely connected to: \n`{eng_repo_url}`")
 
+    # STEP 1: PULL
     if st.button(f"📥 1. Pull Specs from `{eng_branch}`"):
         if workspace_dir.exists(): shutil.rmtree(workspace_dir)
         workspace_dir.mkdir()
@@ -154,10 +156,12 @@ def main():
         auth_url = urllib.parse.urlunparse((parsed.scheme, f"{git_user}:{git_token}@{parsed.netloc}", parsed.path, "", "", ""))
         
         with st.spinner(f"Cloning branch '{eng_branch}'..."):
-            code, _ = run_cmd(["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)], hide_cmd=True)
-            if code == 0: st.success("✅ Successfully pulled engineering files.")
-            else: st.error("❌ Failed to pull repository.")
+            # We don't use run_cmd_safe here to avoid printing the URL with the token
+            p = subprocess.run(["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)], capture_output=True)
+            if p.returncode == 0: st.success("✅ Successfully pulled engineering files.")
+            else: st.error(f"❌ Failed to pull repository: {p.stderr.decode()}")
 
+    # STEP 2: SELECT
     if workspace_dir.exists():
         st.divider()
         st.subheader("🛠️ 2. Select API Spec")
@@ -181,6 +185,7 @@ def main():
             
         final_id = st.text_input("Confirm ReadMe ID:", value=mapped_id)
 
+        # STEP 3: ACTIONS
         st.divider()
         st.subheader("🚀 3. Choose Action")
         tab1, tab2 = st.tabs(["🔍 Validate Only (PR Review)", "☁️ Upload to ReadMe (Release)"])
@@ -193,7 +198,11 @@ def main():
             do_rm = c3.checkbox("ReadMe Validation", value=True, key="v3")
             if st.button("Run Validations Only"):
                 prepped = prep_openapi_file(selected_file_path, target_version)
-                execute_validations(npx, prepped.name, str(prepped.parent.resolve()), do_swag, do_redoc, do_rm)
+                abs_cwd = str(prepped.parent.resolve())
+                st.write("### 🔍 Validation Logs")
+                if do_swag: run_cmd_safe([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
+                if do_redoc: run_cmd_safe([npx, "--yes", "@redocly/cli@1.25.0", "lint", prepped.name], cwd=abs_cwd)
+                if do_rm: run_cmd_safe([npx, "--yes", "rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
 
         with tab2:
             c1, c2, c3 = st.columns(3)
@@ -203,10 +212,28 @@ def main():
             if st.button("Validate & Upload", type="primary"):
                 prepped = prep_openapi_file(selected_file_path, target_version)
                 abs_cwd = str(prepped.parent.resolve())
-                if execute_validations(npx, prepped.name, abs_cwd, u_swag, u_redoc, u_rm):
-                    # Using -- to ensure arguments are passed cleanly to rdme
-                    upload_cmd = [npx, "--yes", "rdme", "--", "openapi", prepped.name, "--key", readme_key, "--id", final_id, "--version", target_version]
-                    run_cmd(upload_cmd, cwd=abs_cwd)
+                
+                st.write("### 🔍 Validation Logs")
+                v_failed = False
+                if u_swag: 
+                    if run_cmd_safe([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)[0] != 0: v_failed = True
+                if u_redoc: 
+                    if run_cmd_safe([npx, "--yes", "@redocly/cli@1.25.0", "lint", prepped.name], cwd=abs_cwd)[0] != 0: v_failed = True
+                if u_rm: 
+                    if run_cmd_safe([npx, "--yes", "rdme", "openapi:validate", prepped.name], cwd=abs_cwd)[0] != 0: v_failed = True
+                
+                if not v_failed:
+                    st.success("✅ Validations passed! Starting Upload...")
+                    # We use a clean list of arguments. rdme openapi <file> --key <key> --id <id> --version <version>
+                    upload_cmd = [
+                        npx, "--yes", "rdme", "openapi", prepped.name, 
+                        "--key", readme_key, 
+                        "--id", final_id, 
+                        "--version", target_version
+                    ]
+                    code, logs = run_cmd_safe(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key])
+                    if code == 0: st.success("🎉 Successfully uploaded!")
+                    else: st.error("❌ Upload failed. See logs above.")
 
 if __name__ == "__main__":
     main()
