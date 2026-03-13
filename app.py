@@ -77,13 +77,21 @@ def ensure_node_installed():
     os.environ["PATH"] = f"{str(node_bin_path.absolute())}{os.pathsep}{os.environ['PATH']}"
 
 # --- HELPER FUNCTIONS ---
-def run_cmd(cmd_list, cwd=None):
-    st.write(f"*> Running: {' '.join(cmd_list)}*")
+# --- HELPER FUNCTIONS ---
+def run_cmd(cmd_list, cwd=None, hide_cmd=False):
+    if not hide_cmd:
+        st.write(f"*> Running: {' '.join(cmd_list)}*")
+        
     process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd)
     output = []
+    
     for line in process.stdout:
-        st.text(line.strip())
-        output.append(line.strip())
+        # Extra safety: strip the token from any output logs just in case
+        safe_line = line.replace(st.secrets.get("GIT_TOKEN", ""), "***")
+        if not hide_cmd:
+            st.text(safe_line.strip())
+        output.append(safe_line.strip())
+        
     process.wait()
     return process.returncode, "\n".join(output)
 
@@ -173,7 +181,7 @@ def main():
         auth_url = urllib.parse.urlunparse((parsed.scheme, f"{git_user}:{git_token}@{parsed.netloc}", parsed.path, "", "", ""))
         
         with st.spinner(f"Cloning branch '{eng_branch}'..."):
-            code, _ = run_cmd(["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)])
+            code, _ = run_cmd(["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)], hide_cmd=True)
             if code == 0: 
                 st.success(f"✅ Successfully pulled engineering files from branch: `{eng_branch}`")
             else: 
