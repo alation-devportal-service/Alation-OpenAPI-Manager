@@ -85,8 +85,7 @@ def run_cmd(cmd_list, cwd=None, hide_cmd=False):
     output = []
     
     for line in process.stdout:
-        # Mask GIT_TOKEN if it appears in output
-        safe_line = line.replace(st.secrets.get("GIT_TOKEN", ""), "***")
+        safe_line = line.replace(st.secrets.get("GIT_TOKEN", ""), "***").replace(st.secrets.get("README_API_KEY", ""), "***")
         if not hide_cmd:
             st.text(safe_line.strip())
         output.append(safe_line.strip())
@@ -122,7 +121,8 @@ def execute_validations(npx, filename, abs_cwd, do_swag, do_redoc, do_readme):
     if do_redoc:
         if run_cmd([npx, "--yes", "@redocly/cli@1.25.0", "lint", filename], cwd=abs_cwd)[0] != 0: failed = True
     if do_readme:
-        if run_cmd([npx, "--yes", "rdme@latest", "openapi:validate", filename], cwd=abs_cwd)[0] != 0: failed = True
+        # Using -- to separate npx from rdme arguments
+        if run_cmd([npx, "--yes", "rdme", "--", "openapi:validate", filename], cwd=abs_cwd)[0] != 0: failed = True
     return not failed
 
 # --- MAIN APP ---
@@ -143,7 +143,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Task Configuration")
         eng_branch = st.text_input("Engineering Branch to pull from", value="master")
-        target_version = st.text_input("ReadMe Version/Branch (e.g., v2026.3.1-0_api-spec-test)", value="1.0.0")
+        target_version = st.text_input("ReadMe Version/Branch", value="v2026.3.1-0_api-spec-test")
         st.divider()
         st.caption(f"🔒 App is securely connected to: \n`{eng_repo_url}`")
 
@@ -167,7 +167,9 @@ def main():
             if target_path.exists(): yaml_files.extend(list(target_path.glob("*.yaml")))
         
         file_options = [f.name for f in yaml_files]
-        if not file_options: return
+        if not file_options: 
+            st.warning("No YAML files found.")
+            return
 
         selected_file_name = st.selectbox("Select Spec to Manage", sorted(file_options))
         selected_file_path = next(f for f in yaml_files if f.name == selected_file_name)
@@ -202,15 +204,9 @@ def main():
                 prepped = prep_openapi_file(selected_file_path, target_version)
                 abs_cwd = str(prepped.parent.resolve())
                 if execute_validations(npx, prepped.name, abs_cwd, u_swag, u_redoc, u_rm):
-                    # NEW STABLE SHELL SYNTAX
-                    raw_cmd = f"{npx} --yes rdme openapi {prepped.name} --key {readme_key} --id {final_id} --version {target_version}"
-                    st.write(f"*> Running: {raw_cmd.replace(readme_key, '***')}*")
-                    process = subprocess.Popen(raw_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=abs_cwd)
-                    for line in process.stdout:
-                        st.text(line.replace(readme_key, "***").strip())
-                    process.wait()
-                    if process.returncode == 0: st.success("🎉 Successfully uploaded!")
-                    else: st.error("❌ Upload failed.")
+                    # Using -- to ensure arguments are passed cleanly to rdme
+                    upload_cmd = [npx, "--yes", "rdme", "--", "openapi", prepped.name, "--key", readme_key, "--id", final_id, "--version", target_version]
+                    run_cmd(upload_cmd, cwd=abs_cwd)
 
 if __name__ == "__main__":
     main()
