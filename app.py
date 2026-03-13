@@ -204,15 +204,24 @@ def main():
                 
                 # Run Validations
                 s1 = execute_command([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
-                s2 = execute_command([npx, "--yes", "rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
+                s2 = execute_command([npx, "--yes", "rdme", "--", "openapi:validate", prepped.name], cwd=abs_cwd)
                 
                 if s1 == 0 and s2 == 0:
                     st.success("✅ Validations passed. Uploading...")
-                    upload_cmd = [npx, "--yes", "rdme", "openapi", prepped.name, "--key", readme_key, "--id", final_id, "--version", target_version]
+                    
+                    # The -- separator is crucial to stop npx from merging 'openapi' and the filename
+                    upload_cmd = [
+                        npx, "--yes", "rdme", "--", 
+                        "openapi", prepped.name, 
+                        "--key", readme_key, 
+                        "--id", final_id, 
+                        "--version", target_version
+                    ]
+                    
                     if execute_command(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
                         st.success("🎉 Upload Successful!")
                     else:
-                        st.error("❌ Upload Failed.")
+                        st.error("❌ Upload Failed. If the error is 'command not found', the CLI is misinterpreting the --id flag.")
 
 if __name__ == "__main__":
     main()
