@@ -260,7 +260,7 @@ def main():
                     st.success("✅ Validations passed! Starting Upload...")
                     
                     # EXACT MATCH UPLOAD USING --id
-                    upload_cmd = [npx, "--yes", "rdme@latest", "openapi", filename, "--key", readme_key, "--id", final_id, "--version", target_version]
+                    upload_cmd = [npx, "rdme@latest", "openapi", filename, "--key", readme_key, "--id", final_id, "--version", target_version]
                     up_code, up_logs = run_cmd(upload_cmd, cwd=abs_cwd)
                     
                     if up_code == 0:
