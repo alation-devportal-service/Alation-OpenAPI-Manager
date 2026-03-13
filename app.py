@@ -79,7 +79,8 @@ def ensure_node_installed():
 # --- STABILIZED COMMAND RUNNER ---
 def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     """
-    Executes a command via shell and prints logs. No return value to avoid UI leaks.
+    Executes a shell command and streams output to UI.
+    Uses shell=True to fix the 'command not found' space issue.
     """
     display_cmd = cmd_string
     for s in mask_secrets:
@@ -89,7 +90,7 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     
     process = subprocess.Popen(
         cmd_string,
-        shell=True, # Critical for fixing the "command not found" space issues
+        shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -101,7 +102,7 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
         for s in mask_secrets:
             if s: clean_line = clean_line.replace(s, "***")
         st.text(clean_line)
-    
+        
     process.wait()
     return process.returncode
 
@@ -134,7 +135,6 @@ def main():
     git_token = st.secrets.get("GIT_TOKEN", "")
     git_user = st.secrets.get("GIT_USER", "")
     eng_repo_url = st.secrets.get("ENG_REPO_URL", "https://github.com/Alation/alation.git")
-    
     path_main = st.secrets.get("PATH_SPECS_MAIN", "django/static/swagger/specs")
     path_logical = st.secrets.get("PATH_SPECS_LOGICAL", "django/static/swagger/specs/logical_metadata")
 
@@ -143,12 +143,11 @@ def main():
     with st.sidebar:
         st.header("⚙️ Task Configuration")
         eng_branch = st.text_input("Engineering Branch", value="master")
-        # Ensure the default matches your test branch
         target_version = st.text_input("ReadMe Version/Branch", value="v2026.3.1-0_api-spec-test")
         st.divider()
         st.caption(f"🔒 Connected to: `{eng_repo_url}`")
 
-    # 1. PULL
+    # STEP 1: PULL
     if st.button(f"📥 1. Pull Specs from `{eng_branch}`"):
         if workspace_dir.exists(): shutil.rmtree(workspace_dir)
         workspace_dir.mkdir()
@@ -159,7 +158,7 @@ def main():
             if p.returncode == 0: st.success("✅ Specs pulled.")
             else: st.error(f"❌ Error: {p.stderr.decode()}")
 
-    # 2. SELECT
+    # STEP 2: SELECT
     if workspace_dir.exists():
         st.divider()
         st.subheader("🛠️ 2. Select API Spec")
@@ -182,7 +181,7 @@ def main():
             
         final_id = st.text_input("Target ReadMe ID:", value=mapped_id)
 
-        # 3. ACTIONS
+        # STEP 3: ACTIONS
         st.divider()
         st.subheader("🚀 3. Choose Action")
         tab1, tab2 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe"])
@@ -208,7 +207,7 @@ def main():
                 
                 if v1 == 0 and v2 == 0:
                     st.success("✅ Validations passed. Uploading...")
-                    # 2. Upload via raw shell string to fix space/parsing issues
+                    # 2. Upload using shell string to bypass list-parsing errors
                     upload_cmd = f"{npx} --yes rdme openapi {prepped.name} --key {readme_key} --id {final_id} --version {target_version}"
                     
                     if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
