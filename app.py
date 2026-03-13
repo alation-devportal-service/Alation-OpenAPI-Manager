@@ -77,19 +77,19 @@ def ensure_node_installed():
     os.environ["PATH"] = f"{str(node_bin_path.absolute())}{os.pathsep}{os.environ['PATH']}"
 
 # --- STABILIZED COMMAND RUNNER ---
-def execute_command(cmd_list, cwd=None, mask_secrets=[]):
+def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     """
-    Executes a command and prints logs to the UI. Returns the exit code.
+    Executes a command via shell and prints logs. No return value to avoid UI leaks.
     """
-    # Create a safe version of the command for the UI
-    visible_cmd = " ".join(cmd_list)
-    for secret in mask_secrets:
-        if secret: visible_cmd = visible_cmd.replace(secret, "***")
+    display_cmd = cmd_string
+    for s in mask_secrets:
+        if s: display_cmd = display_cmd.replace(s, "***")
     
-    st.write(f"*> Running: {visible_cmd}*")
+    st.write(f"*> Running: {display_cmd}*")
     
     process = subprocess.Popen(
-        cmd_list,
+        cmd_string,
+        shell=True, # Critical for fixing the "command not found" space issues
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -98,10 +98,10 @@ def execute_command(cmd_list, cwd=None, mask_secrets=[]):
     
     for line in process.stdout:
         clean_line = line.strip()
-        for secret in mask_secrets:
-            if secret: clean_line = clean_line.replace(secret, "***")
+        for s in mask_secrets:
+            if s: clean_line = clean_line.replace(s, "***")
         st.text(clean_line)
-        
+    
     process.wait()
     return process.returncode
 
@@ -130,11 +130,11 @@ def main():
     ensure_node_installed()
     st.title("📘 Alation OpenAPI Manager")
     
-    # Secrets Retrieval
     readme_key = st.secrets.get("README_API_KEY", "")
     git_token = st.secrets.get("GIT_TOKEN", "")
     git_user = st.secrets.get("GIT_USER", "")
     eng_repo_url = st.secrets.get("ENG_REPO_URL", "https://github.com/Alation/alation.git")
+    
     path_main = st.secrets.get("PATH_SPECS_MAIN", "django/static/swagger/specs")
     path_logical = st.secrets.get("PATH_SPECS_LOGICAL", "django/static/swagger/specs/logical_metadata")
 
@@ -143,23 +143,23 @@ def main():
     with st.sidebar:
         st.header("⚙️ Task Configuration")
         eng_branch = st.text_input("Engineering Branch", value="master")
+        # Ensure the default matches your test branch
         target_version = st.text_input("ReadMe Version/Branch", value="v2026.3.1-0_api-spec-test")
         st.divider()
         st.caption(f"🔒 Connected to: `{eng_repo_url}`")
 
-    # STEP 1: PULL
+    # 1. PULL
     if st.button(f"📥 1. Pull Specs from `{eng_branch}`"):
         if workspace_dir.exists(): shutil.rmtree(workspace_dir)
         workspace_dir.mkdir()
         parsed = urllib.parse.urlparse(eng_repo_url)
         auth_url = urllib.parse.urlunparse((parsed.scheme, f"{git_user}:{git_token}@{parsed.netloc}", parsed.path, "", "", ""))
-        
         with st.spinner("Cloning..."):
             p = subprocess.run(["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)], capture_output=True)
             if p.returncode == 0: st.success("✅ Specs pulled.")
             else: st.error(f"❌ Error: {p.stderr.decode()}")
 
-    # STEP 2: SELECT
+    # 2. SELECT
     if workspace_dir.exists():
         st.divider()
         st.subheader("🛠️ 2. Select API Spec")
@@ -182,26 +182,19 @@ def main():
             
         final_id = st.text_input("Target ReadMe ID:", value=mapped_id)
 
-        # STEP 3: ACTIONS
+        # 3. ACTIONS
         st.divider()
         st.subheader("🚀 3. Choose Action")
-        tab1, tab2 = st.tabs(["🔍 Validate Only (PR Review)", "☁️ Upload to ReadMe (Release)"])
-        
-        # We still use npx for swagger-cli because it's not in requirements.txt
-        # but we use DIRECT 'rdme' for the rest
+        tab1, tab2 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe"])
         npx = shutil.which("npx")
         
         with tab1:
-            if st.button("Run Validations Only"):
+            if st.button("Run Validations"):
                 prepped = prep_openapi_file(selected_file_path, target_version)
                 abs_cwd = str(prepped.parent.resolve())
                 st.write("### 🔍 Logs")
-                
-                # Swagger still uses npx
-                execute_command([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
-                
-                # ReadMe now uses the DIRECT command
-                execute_command(["rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
+                run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                run_command_ui(f"{npx} --yes rdme openapi:validate {prepped.name}", cwd=abs_cwd)
 
         with tab2:
             if st.button("Validate & Upload", type="primary"):
@@ -210,24 +203,18 @@ def main():
                 st.write("### 🔍 Logs")
                 
                 # 1. Validate
-                s1 = execute_command([npx, "--yes", "swagger-cli", "validate", prepped.name], cwd=abs_cwd)
-                s2 = execute_command(["rdme", "openapi:validate", prepped.name], cwd=abs_cwd)
+                v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                v2 = run_command_ui(f"{npx} --yes rdme openapi:validate {prepped.name}", cwd=abs_cwd)
                 
-                if s1 == 0 and s2 == 0:
-                    st.success("✅ Validations passed. Uploading to Refactored Branch...")
+                if v1 == 0 and v2 == 0:
+                    st.success("✅ Validations passed. Uploading...")
+                    # 2. Upload via raw shell string to fix space/parsing issues
+                    upload_cmd = f"{npx} --yes rdme openapi {prepped.name} --key {readme_key} --id {final_id} --version {target_version}"
                     
-                    # 2. Upload using the direct 'rdme' command
-                    # This is the standard syntax for ReadMe Refactored branches
-                    upload_cmd = [
-                        "rdme", "openapi", prepped.name, 
-                        "--key", readme_key, 
-                        "--id", final_id, 
-                        "--version", target_version
-                    ]
-                    
-                    if execute_command(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
-                        st.success(f"🎉 Successfully uploaded to ReadMe branch: `{target_version}`")
+                    if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
+                        st.success("🎉 Successfully uploaded to ReadMe!")
                     else:
-                        st.error("❌ Upload Failed. Check the logs above for the ReadMe API response.")
+                        st.error("❌ Upload failed. See logs above.")
+
 if __name__ == "__main__":
     main()
