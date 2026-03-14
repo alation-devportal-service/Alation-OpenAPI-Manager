@@ -89,13 +89,18 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     
     st.write(f"*> Running: {display_cmd}*")
     
+    # --- NEW: Set CI environment variable to bypass interactive prompts ---
+    run_env = os.environ.copy()
+    run_env["CI"] = "true"
+    
     process = subprocess.Popen(
         cmd_string,
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        cwd=cwd
+        cwd=cwd,
+        env=run_env # <-- Pass the automated environment here
     )
     
     for line in process.stdout:
