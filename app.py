@@ -1,5 +1,6 @@
 import streamlit as st
 import yaml
+import json  # Added json import
 import subprocess
 import shutil
 import requests
@@ -123,8 +124,12 @@ def prep_openapi_file(filepath, version):
                 if "base-url" in server["variables"]:
                     server["variables"]["base-url"]["default"] = "alation_domain"
 
-    with open(filepath, "w") as f: yaml.dump(data, f, sort_keys=False)
-    return filepath
+    # --- UPDATED: Save as JSON instead of YAML to match ReadMe Refactored files ---
+    json_filepath = filepath.with_suffix('.json')
+    with open(json_filepath, "w") as f: 
+        json.dump(data, f, indent=2)
+        
+    return json_filepath
 
 # --- MAIN APP ---
 def main():
@@ -176,10 +181,10 @@ def main():
         
         col1, col2 = st.columns(2)
         col1.info(f"**File:** `{selected_file_name}`")
-        if mapped_id: col2.success(f"**ReadMe ID:** `{mapped_id}`")
-        else: col2.error("⚠️ No ID Mapped.")
+        if mapped_id: col2.success(f"**ReadMe Slug:** `{mapped_id}`")
+        else: col2.error("⚠️ No Slug Mapped.")
             
-        final_id = st.text_input("Target ReadMe ID:", value=mapped_id)
+        final_id = st.text_input("Target ReadMe Slug:", value=mapped_id)
 
         # STEP 3: ACTIONS
         st.divider()
@@ -193,7 +198,8 @@ def main():
                 abs_cwd = str(prepped.parent.resolve())
                 st.write("### 🔍 Logs")
                 run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                run_command_ui(f"{npx} --yes rdme openapi:validate {prepped.name}", cwd=abs_cwd)
+                # UPDATED: openapi:validate changed to openapi validate for v10
+                run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
 
         with tab2:
             if st.button("Validate & Upload", type="primary"):
@@ -203,11 +209,12 @@ def main():
                 
                 # 1. Validate
                 v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                v2 = run_command_ui(f"{npx} --yes rdme openapi:validate {prepped.name}", cwd=abs_cwd)
+                # UPDATED: openapi:validate changed to openapi validate for v10
+                v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
                 
                 if v1 == 0 and v2 == 0:
                     st.success("✅ Validations passed. Uploading...")
-                    # 2. Upload using shell string to bypass list-parsing errors
+                    # 2. Upload using v10 Refactored syntax
                     upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id} --branch {target_version}"
                     
                     if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
