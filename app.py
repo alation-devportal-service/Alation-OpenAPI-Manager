@@ -127,7 +127,8 @@ def prep_openapi_file(filepath, version):
     # --- UPDATED: Save as JSON instead of YAML to match ReadMe Refactored files ---
     json_filepath = filepath.with_suffix('.json')
     with open(json_filepath, "w") as f: 
-        json.dump(data, f, indent=2)
+        # Add default=str to handle PyYAML datetime objects safely!
+        json.dump(data, f, indent=2, default=str)
         
     return json_filepath
 
