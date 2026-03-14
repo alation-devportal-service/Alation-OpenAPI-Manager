@@ -208,7 +208,7 @@ def main():
                 if v1 == 0 and v2 == 0:
                     st.success("✅ Validations passed. Uploading...")
                     # 2. Upload using shell string to bypass list-parsing errors
-                    upload_cmd = f"{npx} --yes rdme openapi {prepped.name} --key {readme_key} --id {final_id} --version {target_version}"
+                    upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id} --branch {target_version}"
                     
                     if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
                         st.success("🎉 Successfully uploaded to ReadMe!")
