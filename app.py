@@ -120,14 +120,13 @@ def prep_openapi_file(filepath, version, target_slug):
                 if "base-url" in server["variables"]:
                     server["variables"]["base-url"]["default"] = "alation_domain"
 
-    # Save as JSON using the standardized target_slug
-    json_filename = f"{target_slug}.json"
-    json_filepath = filepath.parent / json_filename
+    yaml_filename = f"{target_slug}_prepped.yaml"
+    yaml_filepath = filepath.parent / yaml_filename
     
-    with open(json_filepath, "w") as f: 
-        json.dump(data, f, indent=2, default=str)
+    with open(yaml_filepath, "w") as f: 
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
         
-    return json_filepath
+    return yaml_filepath
 
 # --- MAIN APP ---
 def main():
@@ -238,7 +237,7 @@ def main():
                     
                     if v1 == 0 and v2 == 0:
                         st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
-                        upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id} --branch {target_version}"
+                        upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id}.json --branch {target_version}"
                         
                         # THE CRITICAL CHECK: Did the upload actually succeed?
                         if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
