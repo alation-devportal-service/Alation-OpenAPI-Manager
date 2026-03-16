@@ -181,7 +181,10 @@ def main():
         yaml_files = []
         for p in [path_main, path_logical]:
             tp = workspace_dir / p
-            if tp.exists(): yaml_files.extend(list(tp.glob("*.yaml")))
+            if tp.exists(): 
+                # NEW: Filter out the temporary prepped files from the UI!
+                valid_files = [f for f in tp.glob("*.yaml") if not f.name.endswith("_prepped.yaml")]
+                yaml_files.extend(valid_files)
         
         file_options = sorted([f.name for f in yaml_files])
         if not file_options: return
