@@ -37,5 +37,6 @@
     "visual_config": "template-visual-config-api",
     "workflows": "workflows-api",
     "field": "custom-fields-api",
-    "field_value": "custom-field-values-api"
+    "field_value": "custom-field-values-api",
+    "native_data_quality_incidents": "native-data-quality-incidents-api"
 }
