@@ -146,6 +146,7 @@ def main():
     app_repo_name = st.secrets.get("APP_REPO_NAME", "")
     
     workspace_dir = Path("./temp_eng_workspace")
+    workspace_dir.mkdir(exist_ok=True)
 
     # 2. Fetch the latest Slug Mapping Database from GitHub
     current_mapping = {}
@@ -215,7 +216,7 @@ def main():
         # STEP 3: ACTIONS
         st.divider()
         st.subheader("🚀 3. Choose Action")
-        tab1, tab2 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe"])
+        tab1, tab2, tab3 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe", "📂 Manual File Upload"])
         npx = shutil.which("npx")
         
         with tab1:
@@ -242,11 +243,8 @@ def main():
                         st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
                         upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id}.json --branch {target_version}"
                         
-                        # THE CRITICAL CHECK: Did the upload actually succeed?
                         if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
                             st.success("🎉 Successfully uploaded to ReadMe!")
-                            
-                            # ONLY update GitHub if it's a new file AND upload succeeded
                             if is_new_file:
                                 with st.spinner("Pushing new slug to App repo..."):
                                     current_mapping[selected_file_path.stem] = final_id
@@ -254,9 +252,69 @@ def main():
                                     if saved:
                                         st.success(f"📝 Added `'{selected_file_path.stem}': '{final_id}'` to `slug_mapping.json`.")
                                     else:
-                                        st.warning("⚠️ Upload succeeded, but failed to save the mapping to GitHub. Please check service account permissions.")
+                                        st.warning("⚠️ Upload succeeded, but failed to save the mapping to GitHub.")
                         else:
-                            st.error("❌ Upload failed. See logs above. (Database not updated).")
+                            st.error("❌ Upload failed. See logs above.")
+
+        # --- NEW TAB 3: MANUAL UPLOAD ---
+        with tab3:
+            st.info("Bypass the Git repository and directly upload an edited YAML file.")
+            manual_file = st.file_uploader("Upload your modified YAML spec", type=["yaml", "yml"])
+            
+            if manual_file is not None:
+                # Save the uploaded file to our workspace memory
+                manual_path = workspace_dir / manual_file.name
+                with open(manual_path, "wb") as f:
+                    f.write(manual_file.getbuffer())
+                    
+                # Auto-detect slug using your existing database logic
+                manual_mapped_id = current_mapping.get(manual_path.stem, "")
+                is_manual_new = False
+                
+                if not manual_mapped_id:
+                    is_manual_new = True
+                    try:
+                        with open(manual_path, "r") as f: temp_data = yaml.safe_load(f)
+                        raw_title = temp_data.get("info", {}).get("title", manual_path.stem)
+                        manual_mapped_id = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
+                    except Exception:
+                        manual_mapped_id = manual_path.stem
+                
+                # Use a unique key for Streamlit so it doesn't clash with Step 2's input box
+                manual_final_id = st.text_input("Target ReadMe Slug (Manual):", value=manual_mapped_id, key="manual_slug_input")
+                
+                if st.button("Validate & Upload Custom Spec", type="primary"):
+                    if not manual_final_id.strip():
+                        st.error("❌ Target ReadMe Slug cannot be empty.")
+                    else:
+                        # Prep the file: injects x-readme, servers, and version safely!
+                        manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id)
+                        abs_cwd = str(manual_prepped.parent.resolve())
+                        st.write("### 🔍 Logs")
+                        
+                        v1 = run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
+                        v2 = run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
+                        
+                        if v1 == 0 and v2 == 0:
+                            st.success(f"✅ Validations passed. Uploading custom file `{manual_prepped.name}`...")
+                            
+                            # Targeting .json to overwrite cleanly in ReadMe Refactored
+                            upload_cmd = f"{npx} --yes rdme openapi upload {manual_prepped.name} --key {readme_key} --slug {manual_final_id}.json --branch {target_version}"
+                            
+                            if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
+                                st.success("🎉 Successfully uploaded Custom File to ReadMe!")
+                                
+                                # Auto-update GitHub database if it's a new API
+                                if is_manual_new:
+                                    with st.spinner("Pushing new slug to App repo..."):
+                                        current_mapping[manual_path.stem] = manual_final_id
+                                        saved = save_slug_mapping(app_repo_name, svc_git_token, current_mapping, current_sha)
+                                        if saved:
+                                            st.success(f"📝 Added `'{manual_path.stem}': '{manual_final_id}'` to `slug_mapping.json`.")
+                                        else:
+                                            st.warning("⚠️ Upload succeeded, but failed to save mapping to GitHub.")
+                            else:
+                                st.error("❌ Upload failed. See logs above.")
 
 if __name__ == "__main__":
     main()
