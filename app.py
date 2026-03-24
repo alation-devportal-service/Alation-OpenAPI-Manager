@@ -175,119 +175,140 @@ def main():
             if p.returncode == 0: st.success("✅ Specs pulled.")
             else: st.error(f"❌ Error: {p.stderr.decode()}")
 
-    # STEP 2: SELECT
-    if workspace_dir.exists():
-        st.divider()
+    # --- WORKFLOW TABS ---
+    st.divider()
+    tab_git, tab_manual = st.tabs(["🐙 Git Repo Pipeline", "📂 Manual File Upload"])
+    npx = shutil.which("npx")
+
+    # ==========================================
+    # TAB 1: GIT REPO PIPELINE
+    # ==========================================
+    with tab_git:
         st.subheader("🛠️ 2. Select API Spec")
         yaml_files = []
         for p in [path_main, path_logical]:
             tp = workspace_dir / p
             if tp.exists(): 
-                # NEW: Filter out the temporary prepped files from the UI!
+                # Filter out the temporary prepped files
                 valid_files = [f for f in tp.glob("*.yaml") if not f.name.endswith("_prepped.yaml")]
                 yaml_files.extend(valid_files)
         
         file_options = sorted([f.name for f in yaml_files])
-        if not file_options: return
-
-        selected_file_name = st.selectbox("Select Spec", file_options)
-        selected_file_path = next(f for f in yaml_files if f.name == selected_file_name)
         
-        # Check mapping dictionary
-        mapped_id = current_mapping.get(selected_file_path.stem, "")
-        is_new_file = False
-        
-        if not mapped_id:
-            is_new_file = True
-            try:
-                with open(selected_file_path, "r") as f: temp_data = yaml.safe_load(f)
-                raw_title = temp_data.get("info", {}).get("title", selected_file_path.stem)
-                mapped_id = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
-            except Exception:
-                mapped_id = selected_file_path.stem
-        
-        col1, col2 = st.columns(2)
-        col1.info(f"**Original File:** `{selected_file_name}`")
-        if is_new_file: col2.warning(f"**Auto-Generated Slug:** `{mapped_id}`")
-        elif mapped_id: col2.success(f"**Mapped Slug:** `{mapped_id}`")
+        # FIX: Instead of 'return', we gracefully show a message so the rest of the app still renders!
+        if not file_options:
+            st.info("👈 Please click '1. Pull Specs' above to load files from the repository.")
+        else:
+            selected_file_name = st.selectbox("Select Spec", file_options)
+            selected_file_path = next(f for f in yaml_files if f.name == selected_file_name)
             
-        final_id = st.text_input("Target ReadMe Slug (Filename):", value=mapped_id)
+            # Check mapping dictionary
+            mapped_id = current_mapping.get(selected_file_path.stem, "")
+            is_new_file = False
+            
+            if not mapped_id:
+                is_new_file = True
+                try:
+                    with open(selected_file_path, "r") as f: temp_data = yaml.safe_load(f)
+                    raw_title = temp_data.get("info", {}).get("title", selected_file_path.stem)
+                    mapped_id = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
+                except Exception:
+                    mapped_id = selected_file_path.stem
+            
+            col1, col2 = st.columns(2)
+            col1.info(f"**Original File:** `{selected_file_name}`")
+            if is_new_file: col2.warning(f"**Auto-Generated Slug:** `{mapped_id}`")
+            elif mapped_id: col2.success(f"**Mapped Slug:** `{mapped_id}`")
+                
+            final_id = st.text_input("Target ReadMe Slug (Filename):", value=mapped_id)
 
-        # STEP 3: ACTIONS
-        st.divider()
-        st.subheader("🚀 3. Choose Action")
-        tab1, tab2, tab3 = st.tabs(["🔍 Validate Only", "☁️ Upload to ReadMe", "📂 Manual File Upload"])
-        npx = shutil.which("npx")
-        
-        with tab1:
-            if st.button("Run Validations"):
-                prepped = prep_openapi_file(selected_file_path, target_version, final_id)
-                abs_cwd = str(prepped.parent.resolve())
-                st.write("### 🔍 Logs")
-                run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-
-        with tab2:
-            if st.button("Validate & Upload", type="primary"):
-                if not final_id.strip():
-                    st.error("❌ Target ReadMe Slug cannot be empty.")
-                else:
+            # STEP 3: ACTIONS
+            st.divider()
+            st.subheader("🚀 3. Choose Action")
+            
+            col_v, col_u = st.columns(2)
+            with col_v:
+                if st.button("🔍 Run Validations Only"):
                     prepped = prep_openapi_file(selected_file_path, target_version, final_id)
                     abs_cwd = str(prepped.parent.resolve())
                     st.write("### 🔍 Logs")
-                    
-                    v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                    v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-                    
-                    if v1 == 0 and v2 == 0:
-                        st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
-                        upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id}.json --branch {target_version}"
-                        
-                        if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
-                            st.success("🎉 Successfully uploaded to ReadMe!")
-                            if is_new_file:
-                                with st.spinner("Pushing new slug to App repo..."):
-                                    current_mapping[selected_file_path.stem] = final_id
-                                    saved = save_slug_mapping(app_repo_name, svc_git_token, current_mapping, current_sha)
-                                    if saved:
-                                        st.success(f"📝 Added `'{selected_file_path.stem}': '{final_id}'` to `slug_mapping.json`.")
-                                    else:
-                                        st.warning("⚠️ Upload succeeded, but failed to save the mapping to GitHub.")
-                        else:
-                            st.error("❌ Upload failed. See logs above.")
+                    run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                    run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
 
-        # --- NEW TAB 3: MANUAL UPLOAD ---
-        with tab3:
-            st.info("Bypass the Git repository and directly upload an edited YAML file.")
-            manual_file = st.file_uploader("Upload your modified YAML spec", type=["yaml", "yml"])
+            with col_u:
+                if st.button("☁️ Validate & Upload", type="primary"):
+                    if not final_id.strip():
+                        st.error("❌ Target ReadMe Slug cannot be empty.")
+                    else:
+                        prepped = prep_openapi_file(selected_file_path, target_version, final_id)
+                        abs_cwd = str(prepped.parent.resolve())
+                        st.write("### 🔍 Logs")
+                        
+                        v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                        v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+                        
+                        if v1 == 0 and v2 == 0:
+                            st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
+                            upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id}.json --branch {target_version}"
+                            
+                            if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
+                                st.success("🎉 Successfully uploaded to ReadMe!")
+                                if is_new_file:
+                                    with st.spinner("Pushing new slug to App repo..."):
+                                        current_mapping[selected_file_path.stem] = final_id
+                                        saved = save_slug_mapping(app_repo_name, svc_git_token, current_mapping, current_sha)
+                                        if saved:
+                                            st.success(f"📝 Added `'{selected_file_path.stem}': '{final_id}'` to `slug_mapping.json`.")
+                                        else:
+                                            st.warning("⚠️ Upload succeeded, but failed to save the mapping to GitHub.")
+                            else:
+                                st.error("❌ Upload failed. See logs above.")
+
+    # ==========================================
+    # TAB 2: MANUAL FILE UPLOAD
+    # ==========================================
+    with tab_manual:
+        st.subheader("📂 Manual File Upload")
+        st.info("Bypass the Git repository and directly upload an edited YAML file. The app will automatically inject the ReadMe settings before uploading.")
+        
+        manual_file = st.file_uploader("Upload your modified YAML spec", type=["yaml", "yml"])
+        
+        if manual_file is not None:
+            # Save the uploaded file to our workspace memory
+            manual_path = workspace_dir / manual_file.name
+            with open(manual_path, "wb") as f:
+                f.write(manual_file.getbuffer())
+                
+            # Auto-detect slug using your existing database logic
+            manual_mapped_id = current_mapping.get(manual_path.stem, "")
+            is_manual_new = False
             
-            if manual_file is not None:
-                # Save the uploaded file to our workspace memory
-                manual_path = workspace_dir / manual_file.name
-                with open(manual_path, "wb") as f:
-                    f.write(manual_file.getbuffer())
-                    
-                # Auto-detect slug using your existing database logic
-                manual_mapped_id = current_mapping.get(manual_path.stem, "")
-                is_manual_new = False
-                
-                if not manual_mapped_id:
-                    is_manual_new = True
-                    try:
-                        with open(manual_path, "r") as f: temp_data = yaml.safe_load(f)
-                        raw_title = temp_data.get("info", {}).get("title", manual_path.stem)
-                        manual_mapped_id = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
-                    except Exception:
-                        manual_mapped_id = manual_path.stem
-                
-                # Use a unique key for Streamlit so it doesn't clash with Step 2's input box
-                manual_final_id = st.text_input("Target ReadMe Slug (Manual):", value=manual_mapped_id, key="manual_slug_input")
-                
-                if st.button("Validate & Upload Custom Spec", type="primary"):
+            if not manual_mapped_id:
+                is_manual_new = True
+                try:
+                    with open(manual_path, "r") as f: temp_data = yaml.safe_load(f)
+                    raw_title = temp_data.get("info", {}).get("title", manual_path.stem)
+                    manual_mapped_id = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
+                except Exception:
+                    manual_mapped_id = manual_path.stem
+            
+            # Use a unique key for Streamlit so it doesn't clash with the Git tab's input box
+            manual_final_id = st.text_input("Target ReadMe Slug (Manual):", value=manual_mapped_id, key="manual_slug_input")
+            
+            col_mv, col_mu = st.columns(2)
+            with col_mv:
+                if st.button("🔍 Validate Custom Spec"):
+                    manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id)
+                    abs_cwd = str(manual_prepped.parent.resolve())
+                    st.write("### 🔍 Logs")
+                    run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
+                    run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
+
+            with col_mu:
+                if st.button("☁️ Validate & Upload Custom Spec", type="primary"):
                     if not manual_final_id.strip():
                         st.error("❌ Target ReadMe Slug cannot be empty.")
                     else:
-                        # Prep the file: injects x-readme, servers, and version safely!
                         manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id)
                         abs_cwd = str(manual_prepped.parent.resolve())
                         st.write("### 🔍 Logs")
