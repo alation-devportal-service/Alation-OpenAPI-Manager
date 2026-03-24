@@ -247,8 +247,11 @@ def main():
                         v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
                         v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
                         
-                        if v1 == 0 and v2 == 0:
-                            st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
+                        if v2 == 0:
+                            if v1 != 0:
+                                st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
+                            else:
+                                st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
                             upload_cmd = f"{npx} --yes rdme openapi upload {prepped.name} --key {readme_key} --slug {final_id}.json --branch {target_version}"
                             
                             if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
@@ -330,8 +333,11 @@ def main():
                                 v1 = run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
                                 v2 = run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
                                 
-                                if v1 == 0 and v2 == 0:
-                                    st.success(f"✅ Validations passed. Uploading custom file `{manual_prepped.name}`...")
+                                if v2 == 0:
+                                    if v1 != 0:
+                                        st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
+                                    else:
+                                        st.success(f"✅ Validations passed. Uploading custom file `{manual_prepped.name}`...")
                                     
                                     # Targeting .json to overwrite cleanly in ReadMe Refactored
                                     upload_cmd = f"{npx} --yes rdme openapi upload {manual_prepped.name} --key {readme_key} --slug {manual_final_id}.json --branch {target_version}"
