@@ -38,5 +38,6 @@
     "workflows": "workflows-api",
     "field": "custom-fields-api",
     "field_value": "custom-field-values-api",
-    "native_data_quality_incidents": "native-data-quality-incidents-api"
+    "native_data_quality_incidents": "native-data-quality-incidents-api",
+    "data_products_auth": "data-product-authentication-apis"
 }
