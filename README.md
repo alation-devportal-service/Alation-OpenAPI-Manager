@@ -72,7 +72,7 @@ Configure Task: Set your target ReadMe version and Engineering branch in the sid
 
 - **Manual File Upload:** If you have local edits, upload your YAML file here. The app will inject it into the cloned repo context to maintain dependency links before validating and uploading.
 
-📄 License
+## 📄 License
 This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
