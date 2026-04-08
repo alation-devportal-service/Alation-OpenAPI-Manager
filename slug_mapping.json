@@ -39,5 +39,6 @@
     "field": "custom-fields-api",
     "field_value": "custom-field-values-api",
     "native_data_quality_incidents": "native-data-quality-incidents-api",
-    "data_products_auth": "data-product-authentication-apis"
+    "data_products_auth": "data-product-authentication-apis",
+    "per_object_parameters": "bulk-per-object-parameters-api"
 }
