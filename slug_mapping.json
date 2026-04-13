@@ -41,5 +41,6 @@
     "native_data_quality_incidents": "native-data-quality-incidents-api",
     "data_products_auth": "data-product-authentication-apis",
     "per_object_parameters": "bulk-per-object-parameters-api",
-    "cde-public-api-fixed": "cde"
+    "cde-public-api-fixed": "cde",
+    "cde-public-api": "cde"
 }
