@@ -272,13 +272,15 @@ def main():
     # ==========================================
     with tab_manual:
         st.subheader("📂 Manual File Override")
-        st.info("Upload your modified YAML spec. **Note:** You must 'Pull Specs' first so the app has the external `$ref` dependency files to validate against!")
         
-        # Ensure the repo is pulled so we have the dependencies
+        # 1. Update the info text to mention JSON is accepted
+        st.info("Upload your modified YAML or JSON spec. **Note:** You must 'Pull Specs' first so the app has the external `$ref` dependency files to validate against!")
+        
         if not list(workspace_dir.glob("**/*.yaml")):
             st.warning("⚠️ Please click '1. Pull Specs' in the sidebar first to load the dependency schemas.")
         else:
-            manual_file = st.file_uploader("Upload your modified YAML spec", type=["yaml", "yml"])
+            # 2. Add "json" to the list of allowed file types here
+            manual_file = st.file_uploader("Upload your modified YAML or JSON spec", type=["yaml", "yml", "json"])
             
             if manual_file is not None:
                 # Search the cloned repo to find where this file naturally lives
