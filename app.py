@@ -287,7 +287,14 @@ def main():
                 target_paths = list(workspace_dir.rglob(manual_file.name))
                 
                 if not target_paths:
-                    st.error(f"❌ Could not find a file named `{manual_file.name}` in the repository. The app needs the original file's location to resolve $ref dependencies correctly.")
+                    # SOLUTION: Handle independent files instead of throwing an error
+                    st.info(f"ℹ️ `{manual_file.name}` not found in the repository. Treating as an independent, standalone file.")
+                    
+                    # Save it directly to the root of our temporary workspace
+                    manual_path = workspace_dir / manual_file.name
+                    with open(manual_path, "wb") as f:
+                        f.write(manual_file.getbuffer())
+                        
                 else:
                     # We found the original file's location! 
                     manual_path = target_paths[0]
