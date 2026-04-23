@@ -42,5 +42,6 @@
     "data_products_auth": "data-product-authentication-apis",
     "per_object_parameters": "bulk-per-object-parameters-api",
     "cde-public-api-fixed": "cde",
-    "cde-public-api": "cde"
+    "cde-public-api": "cde",
+    "ocf_unified_api": "unified-ocf-source-operations-api"
 }
