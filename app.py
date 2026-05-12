@@ -128,7 +128,20 @@ def get_branch_reference_categories(readme_version, readme_key):
     categories = resp.json().get("data", [])
     return sorted(categories, key=lambda c: c.get("position", 0)), None
 
-def get_category_pages(readme_version, category_title, readme_key):
+def get_reference_page(readme_version, page_slug, readme_key):
+    """
+    Returns full detail for a single reference page including:
+    - api.method, api.path  (HTTP method and endpoint path)
+    - data.uri              (contains the owning spec filename)
+    Calls GET /branches/{branch}/reference/{slug}
+    """
+    resp = readme_get(
+        f"/branches/{readme_branch(readme_version)}/reference/{page_slug}",
+        readme_key
+    )
+    if resp.status_code != 200:
+        return None
+    return resp.json().get("data", {})
     """
     Returns ordered list of pages for a reference category.
     Each page has: title, slug, position, api (method + path), type.
@@ -202,28 +215,30 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
 # OPENAPI FILE PREP (for ReadMe upload)
 # ---------------------------------------------------------------------------
 
-def prep_openapi_file(filepath, version, target_slug):
+def prep_spec_content(filepath, version, readme_slug):
+    """
+    Loads a YAML spec, applies ReadMe/Mintlify prep transformations,
+    and returns the result as JSON bytes. No temp files written.
+    """
     with open(filepath, "r") as f:
         data = yaml.safe_load(f)
-    if "info" not in data:
-        data["info"] = {}
-    data["info"]["version"] = version
-    if "x-readme" not in data:
-        data["x-readme"] = {}
-    data["x-readme"]["explorer-enabled"] = False
-    data["x-readme"]["proxy-enabled"] = True
-    if "servers" in data and isinstance(data["servers"], list):
-        for server in data["servers"]:
-            if "variables" in server:
-                if "protocol" in server["variables"]:
-                    server["variables"]["protocol"]["default"] = "https"
-                if "base-url" in server["variables"]:
-                    server["variables"]["base-url"]["default"] = "alation_domain"
-    yaml_filename = f"{target_slug}_prepped.yaml"
-    yaml_filepath = filepath.parent / yaml_filename
-    with open(yaml_filepath, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-    return yaml_filepath
+
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML did not parse to a dict — got {type(data)}")
+
+    data.setdefault("info", {})["version"] = version
+    data.setdefault("x-readme", {}).update({
+        "explorer-enabled": False,
+        "proxy-enabled":    True,
+    })
+    for server in data.get("servers", []):
+        variables = server.get("variables", {})
+        if "protocol" in variables:
+            variables["protocol"]["default"] = "https"
+        if "base-url" in variables:
+            variables["base-url"]["default"] = "alation_domain"
+
+    return json.dumps(data, indent=2, cls=SafeEncoder).encode("utf-8")
 
 # ---------------------------------------------------------------------------
 # MDX GENERATION HELPERS
@@ -681,17 +696,13 @@ def main():
                             candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
                             if candidate.exists():
                                 try:
-                                    prepped = prep_openapi_file(candidate, display_version, readme_slug)
-                                    with open(prepped, "r") as f:
-                                        spec_data = yaml.safe_load(f)
-                                    spec_content = json.dumps(spec_data, indent=2, cls=SafeEncoder).encode("utf-8")
-                                    prepped.unlink()
+                                    spec_content = prep_spec_content(candidate, display_version, readme_slug)
                                     used_eng_key = eng_key
                                 except Exception as e:
                                     st.error(f"❌ `{readme_slug}`: failed to prep `{eng_key}.yaml` — {e}")
-                                break
+                                break  # found the file, stop searching dirs
                         if spec_content is not None:
-                            break
+                            break  # found a working eng_key, stop trying others
 
                     if spec_content is None:
                         # The YAML should exist since slug_mapping.json defines it —
@@ -729,57 +740,80 @@ def main():
 
                 # ==============================================================
                 # STEP 4: For each category, fetch its pages from ReadMe,
-                # generate MDX files using ReadMe titles/slugs, commit them,
-                # and build the docs.json navigation groups.
+                # call the individual page endpoint to get method + path +
+                # owning spec, generate MDX, commit, build docs.json groups.
                 # ==============================================================
                 version_groups = []
 
                 for category in categories:
-                    cat_title  = category.get("title", "")
-                    cat_uri    = category.get("uri", "")
+                    cat_title = category.get("title", "")
 
                     # Get ordered pages within this category
                     pages, err = get_category_pages(readme_version, cat_title, readme_key)
                     if err:
-                        st.warning(f"⚠️ Could not fetch pages for category `{cat_title}`: {err}")
+                        st.warning(f"⚠️ Could not fetch pages for `{cat_title}`: {err}")
                         continue
 
                     if not pages:
                         continue
 
-                    nav_pages  = []  # Mintlify page paths for this group
+                    nav_pages = []
 
                     for page in pages:
-                        page_title  = page.get("title", "")
-                        page_slug   = page.get("slug", "")
-                        page_type   = page.get("type", "")
-                        api_info    = page.get("api", {})
-                        api_method  = api_info.get("method", "")
-                        api_path    = api_info.get("path", "")
+                        page_title = page.get("title", "")
+                        page_slug  = page.get("slug", "")
 
-                        # Determine which spec this page belongs to by checking
-                        # which committed spec contains this endpoint
-                        owning_spec = None
-                        if api_method and api_path:
-                            for slug, spec_path in committed_specs.items():
-                                owning_spec = slug
-                                break  # refine below with actual spec content check
+                        # Fetch full page detail to get api.method, api.path,
+                        # and the owning spec URI
+                        detail = get_reference_page(readme_version, page_slug, readme_key)
 
-                        mdx_filename   = slug_to_mdx_filename(page_slug)
-                        mdx_repo_path  = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
-                        # Path as referenced in docs.json (relative to mintlify-poc-docs/)
-                        mdx_nav_path   = f"api-reference/{display_version}/{page_slug}"
+                        api_method   = ""
+                        api_path     = ""
+                        spec_rel_path = None
 
-                        # Build MDX content
-                        if api_method and api_path and owning_spec:
-                            spec_rel_path = committed_specs[owning_spec]
-                            mdx_content   = build_endpoint_mdx(
+                        if detail:
+                            api_info   = detail.get("api") or {}
+                            api_method = api_info.get("method", "")
+                            api_path   = api_info.get("path", "")
+
+                            if api_method and api_path:
+                                # The individual page response embeds the full spec schema.
+                                # Extract the spec title from api.schema.info.title and
+                                # match it against committed specs by slug.
+                                # e.g. "Token Authentication and Management APIs." →
+                                #      "token-authentication-and-management-apis"
+                                schema_title = (
+                                    (api_info.get("schema") or {})
+                                    .get("info", {})
+                                    .get("title", "")
+                                )
+                                derived_slug = re.sub(
+                                    r"[^a-z0-9]+", "-",
+                                    schema_title.lower()
+                                ).strip("-")
+
+                                # Try exact match first, then prefix match
+                                if derived_slug in committed_specs:
+                                    spec_rel_path = committed_specs[derived_slug]
+                                else:
+                                    # Prefix match — e.g. derived may have trailing dot
+                                    for slug, rel_path in committed_specs.items():
+                                        if slug.startswith(derived_slug[:20]) or derived_slug.startswith(slug[:20]):
+                                            spec_rel_path = rel_path
+                                            break
+
+                        mdx_filename  = slug_to_mdx_filename(page_slug)
+                        mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
+                        mdx_nav_path  = f"api-reference/{display_version}/{page_slug}"
+
+                        # Build MDX with openapi frontmatter if we have method+path+spec
+                        if api_method and api_path and spec_rel_path:
+                            mdx_content = build_endpoint_mdx(
                                 page_title, page_slug, spec_rel_path, api_method, api_path
                             )
                         else:
                             mdx_content = build_overview_mdx(page_title, page_slug)
 
-                        # Commit MDX to branch
                         ok, _ = commit_file_to_branch(
                             repo          = mintlify_repo,
                             token         = git_token,
