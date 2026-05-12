@@ -429,7 +429,7 @@ def main():
             elif not readme_key:
                 st.error("❌ README_API_KEY secret is missing.")
             else:
-                all_dropdowns = []
+                all_versions = []
                 any_failures = False
 
                 for readme_version in selected_versions:
@@ -553,8 +553,8 @@ def main():
                             + ", ".join(f"`{s}`" for s in failed)
                         )
 
-                    all_dropdowns.append({
-                        "dropdown": display_version,
+                    all_versions.append({
+                        "version": display_version,
                         "groups": groups
                     })
 
@@ -582,14 +582,14 @@ def main():
                     )
                     docs_sha = existing_docs_resp.json()["sha"]
 
-                    # Find the API Reference tab and replace with dropdowns
+                    # Find the API Reference tab and replace with versions
                     patched = False
                     for tab in docs_data.get("navigation", {}).get("tabs", []):
                         if tab.get("tab") == "API Reference":
-                            tab.pop("versions", None)
+                            tab.pop("dropdowns", None)
                             tab.pop("groups", None)
                             tab.pop("pages", None)
-                            tab["dropdowns"] = all_dropdowns
+                            tab["versions"] = all_versions
                             patched = True
                             break
 
