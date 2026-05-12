@@ -53,20 +53,27 @@ def save_slug_mapping(repo_name, token, updated_mapping, sha):
     resp = gh_put(url, token, payload)
     return resp.status_code in [200, 201]
 
-def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message):
-    """Creates or updates a file on a GitHub branch. Returns (ok, response)."""
+def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message, retries=2):
+    """Creates or updates a file on a GitHub branch. Retries on SHA conflict. Returns (ok, response)."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
-    existing = gh_get(url, token, params={"ref": branch})
-    sha = existing.json().get("sha") if existing.status_code == 200 else None
-    payload = {
-        "message": message,
-        "content": base64.b64encode(content_bytes).decode("utf-8"),
-        "branch": branch,
-    }
-    if sha:
-        payload["sha"] = sha
-    resp = gh_put(url, token, payload)
-    return resp.status_code in [200, 201], resp
+    for attempt in range(retries + 1):
+        existing = gh_get(url, token, params={"ref": branch})
+        sha = existing.json().get("sha") if existing.status_code == 200 else None
+        payload = {
+            "message": message,
+            "content": base64.b64encode(content_bytes).decode("utf-8"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+        resp = gh_put(url, token, payload)
+        if resp.status_code in [200, 201]:
+            return True, resp
+        # 409 Conflict = SHA mismatch, retry by re-fetching SHA
+        if resp.status_code == 409 and attempt < retries:
+            continue
+        return False, resp
+    return False, resp
 
 # ---------------------------------------------------------------------------
 # README API v2 HELPERS
@@ -302,9 +309,11 @@ def main():
     else:
         st.error("⚠️ Missing Service Account secrets! Cannot load or save slug mappings.")
 
-    # Build reverse mapping: readme_slug → eng_key (yaml stem)
-    # e.g. "alation-agent-api" → "agent"
-    reverse_mapping = {v: k for k, v in current_mapping.items()}
+    # Build reverse mapping: readme_slug → list of possible eng_keys
+    # e.g. "cde" → ["cde-public-api-fixed", "cde-public-api"]
+    reverse_mapping = {}
+    for eng_key, readme_slug in current_mapping.items():
+        reverse_mapping.setdefault(readme_slug, []).append(eng_key)
 
     # --- Sidebar ---
     with st.sidebar:
@@ -627,43 +636,64 @@ def main():
                 st.write(f"📂 Found **{len(categories)}** reference categories")
 
                 # ==============================================================
-                # STEP 3: For each spec that exists in this version, source the
-                # YAML from the eng repo, prep it, and commit as JSON to Mintlify
+                # STEP 3: For each spec ReadMe has for this version, use
+                # slug_mapping.json to find the exact YAML in the eng repo.
+                #
+                # Flow:
+                #   ReadMe filename → readme_slug
+                #   slug_mapping (reversed) → eng_key
+                #   eng repo → {eng_key}.yaml
                 # ==============================================================
-                committed_specs = {}  # readme_slug → repo path (relative to docs root)
+                committed_specs = {}  # readme_slug → repo-relative path
                 skipped_specs   = []
                 failed_specs    = []
 
                 for filename in sorted(branch_slugs):
-                    # filename looks like "alation-agent-api.json"
-                    readme_slug = filename.replace(".json", "").replace(".yaml", "").replace(".yml", "")
-                    eng_key     = reverse_mapping.get(readme_slug)
+                    # Strip extension to get the ReadMe slug
+                    # e.g. "alation-agent-api.json" → "alation-agent-api"
+                    readme_slug = re.sub(r"\.(json|yaml|yml)$", "", filename)
 
-                    if not eng_key:
+                    # Look up the eng_key using slug_mapping (reversed)
+                    # e.g. "alation-agent-api" → ["agent"]
+                    eng_keys = reverse_mapping.get(readme_slug)
+                    if not eng_keys:
                         skipped_specs.append(readme_slug)
+                        st.warning(f"⚠️ `{readme_slug}`: not in slug_mapping.json — skipping.")
                         continue
 
-                    # Find the YAML in the eng repo
+                    # Find the YAML in the pulled eng repo using the eng_key
+                    # slug_mapping guarantees the filename: eng_key + ".yaml"
                     spec_content = None
-                    for spec_dir in [path_main, path_logical]:
-                        candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
-                        if candidate.exists():
-                            try:
-                                prepped = prep_openapi_file(candidate, display_version, readme_slug)
-                                with open(prepped, "r") as f:
-                                    spec_data = yaml.safe_load(f)
-                                spec_content = json.dumps(spec_data, indent=2).encode("utf-8")
-                                prepped.unlink()
-                            except Exception as e:
-                                st.warning(f"⚠️ `{readme_slug}`: prep failed — {e}")
+                    used_eng_key = None
+                    for eng_key in eng_keys:
+                        for spec_dir in [path_main, path_logical]:
+                            candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
+                            if candidate.exists():
+                                try:
+                                    prepped = prep_openapi_file(candidate, display_version, readme_slug)
+                                    with open(prepped, "r") as f:
+                                        spec_data = yaml.safe_load(f)
+                                    spec_content = json.dumps(spec_data, indent=2).encode("utf-8")
+                                    prepped.unlink()
+                                    used_eng_key = eng_key
+                                except Exception as e:
+                                    st.error(f"❌ `{readme_slug}`: failed to prep `{eng_key}.yaml` — {e}")
+                                break
+                        if spec_content is not None:
                             break
 
                     if spec_content is None:
+                        # The YAML should exist since slug_mapping.json defines it —
+                        # if it's missing the eng repo may need to be re-pulled.
                         skipped_specs.append(readme_slug)
-                        st.warning(f"⚠️ `{readme_slug}`: YAML `{eng_key}.yaml` not found in eng repo.")
+                        tried = ", ".join(f"`{k}.yaml`" for k in eng_keys)
+                        st.error(
+                            f"❌ `{readme_slug}`: YAML not found in pulled eng repo "
+                            f"(tried {tried}). Re-pull specs and try again."
+                        )
                         continue
 
-                    # Commit spec JSON to Mintlify branch
+                    # Commit the prepped spec JSON to the Mintlify branch
                     spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.json"
                     ok, put_resp   = commit_file_to_branch(
                         repo          = mintlify_repo,
@@ -671,10 +701,9 @@ def main():
                         branch        = MINTLIFY_BRANCH,
                         file_path     = spec_repo_path,
                         content_bytes = spec_content,
-                        message       = f"🤖 Spec: {readme_slug} ({display_version})"
+                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_eng_key}.yaml"
                     )
                     if ok:
-                        # Store path relative to mintlify-poc-docs/ for use in MDX frontmatter
                         committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.json"
                     else:
                         failed_specs.append(readme_slug)
@@ -683,9 +712,9 @@ def main():
 
                 st.success(f"✅ Committed **{len(committed_specs)}** spec(s)")
                 if skipped_specs:
-                    st.info(f"ℹ️ Skipped (no eng YAML or slug mapping): {', '.join(f'`{s}`' for s in skipped_specs)}")
+                    st.info(f"ℹ️ Skipped: {', '.join(f'`{s}`' for s in skipped_specs)}")
                 if failed_specs:
-                    st.warning(f"⚠️ Failed commits: {', '.join(f'`{s}`' for s in failed_specs)}")
+                    st.warning(f"⚠️ Failed: {', '.join(f'`{s}`' for s in failed_specs)}")
 
                 # ==============================================================
                 # STEP 4: For each category, fetch its pages from ReadMe,
