@@ -440,9 +440,11 @@ def main():
                     failed = []
 
                     for eng_key, readme_slug in current_mapping.items():
+                        # ReadMe v2 API: GET /branches/{branch}/apis/{filename}
+                        # Slugs in ReadMe are stored as {name}.json
                         fetch_url = (
-                            f"https://api.readme.com/v2/openapi/{readme_slug}"
-                            f"?version={readme_version}"
+                            f"https://api.readme.com/v2/branches/{readme_version}"
+                            f"/apis/{readme_slug}.json"
                         )
                         resp = requests.get(
                             fetch_url,
@@ -450,6 +452,25 @@ def main():
                         )
 
                         if resp.status_code == 200:
+                            # v2 GET /branches/{branch}/apis/{filename} returns metadata.
+                            # Extract the raw spec content from the response data.
+                            resp_data = resp.json().get("data", {})
+                            source_url = (resp_data.get("source") or {}).get("url")
+
+                            if source_url:
+                                spec_resp = requests.get(source_url)
+                                spec_content = spec_resp.content
+                            else:
+                                # No source URL (CLI-uploaded) — re-fetch requesting raw spec
+                                spec_resp = requests.get(
+                                    f"https://api.readme.com/v2/branches/{readme_version}"
+                                    f"/apis/{readme_slug}.json",
+                                    headers={
+                                        "Authorization": f"Bearer {readme_key}",
+                                        "Accept": "application/octet-stream"
+                                    }
+                                )
+                                spec_content = spec_resp.content
                             file_path_in_repo = (
                                 f"{API_REF_BASE}/{display_version}/{readme_slug}.json"
                             )
@@ -470,7 +491,7 @@ def main():
                                 else None
                             )
 
-                            encoded = base64.b64encode(resp.content).decode("utf-8")
+                            encoded = base64.b64encode(spec_content).decode("utf-8")
                             commit_payload = {
                                 "message": (
                                     f"🤖 Pull {readme_slug} for {display_version} from ReadMe"
