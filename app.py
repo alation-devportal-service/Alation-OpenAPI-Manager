@@ -72,7 +72,12 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
 # README API v2 HELPERS
 # ---------------------------------------------------------------------------
 
-def readme_get(path, readme_key, params=None):
+def readme_branch(readme_version):
+    """
+    Strips the leading 'v' from a ReadMe version slug for use in API calls.
+    The ReadMe UI displays 'v2026.5.0-0' but the API expects '2026.5.0-0'.
+    """
+    return readme_version.lstrip("v")
     """GET against the ReadMe v2 API."""
     return requests.get(
         f"https://api.readme.com/v2{path}",
@@ -85,7 +90,7 @@ def get_branch_api_slugs(readme_version, readme_key):
     Returns the set of spec filenames (e.g. 'alation-agent-api.json')
     that exist for the given branch, by calling GET /branches/{branch}/apis.
     """
-    resp = readme_get(f"/branches/{readme_version}/apis", readme_key)
+    resp = readme_get(f"/branches/{readme_branch(readme_version)}/apis", readme_key)
     if resp.status_code != 200:
         return set(), resp.text
     items = resp.json().get("data", [])
@@ -97,7 +102,7 @@ def get_branch_reference_categories(readme_version, readme_key):
     Each category has: title, uri, position.
     Calls GET /branches/{branch}/categories/reference
     """
-    resp = readme_get(f"/branches/{readme_version}/categories/reference", readme_key)
+    resp = readme_get(f"/branches/{readme_branch(readme_version)}/categories/reference", readme_key)
     if resp.status_code != 200:
         return [], resp.text
     categories = resp.json().get("data", [])
@@ -110,7 +115,7 @@ def get_category_pages(readme_version, category_title, readme_key):
     Calls GET /branches/{branch}/categories/reference/{title}/pages
     """
     resp = readme_get(
-        f"/branches/{readme_version}/categories/reference/{category_title}/pages",
+        f"/branches/{readme_branch(readme_version)}/categories/reference/{category_title}/pages",
         readme_key
     )
     if resp.status_code != 200:
@@ -541,13 +546,13 @@ def main():
 
             with col_d1:
                 if st.button("📋 Inspect Spec List"):
-                    resp = readme_get(f"/branches/{debug_version}/apis", readme_key)
+                    resp = readme_get(f"/branches/{readme_branch(debug_version)}/apis", readme_key)
                     st.write(f"**Status:** {resp.status_code}")
                     st.json(resp.json())
 
             with col_d2:
                 if st.button("📂 Inspect Categories"):
-                    resp = readme_get(f"/branches/{debug_version}/categories/reference", readme_key)
+                    resp = readme_get(f"/branches/{readme_branch(debug_version)}/categories/reference", readme_key)
                     st.write(f"**Status:** {resp.status_code}")
                     st.json(resp.json())
 
@@ -555,7 +560,7 @@ def main():
                 debug_cat = st.text_input("Category title to inspect pages", key="debug_cat")
                 if st.button("📄 Inspect Category Pages") and debug_cat:
                     resp = readme_get(
-                        f"/branches/{debug_version}/categories/reference/{debug_cat}/pages",
+                        f"/branches/{readme_branch(debug_version)}/categories/reference/{debug_cat}/pages",
                         readme_key
                     )
                     st.write(f"**Status:** {resp.status_code}")
@@ -565,7 +570,7 @@ def main():
             debug_slug = st.text_input("Reference page slug to inspect", key="debug_slug")
             if st.button("🔍 Inspect Single Reference Page") and debug_slug:
                 resp = readme_get(
-                    f"/branches/{debug_version}/reference/{debug_slug}",
+                    f"/branches/{readme_branch(debug_version)}/reference/{debug_slug}",
                     readme_key
                 )
                 st.write(f"**Status:** {resp.status_code}")
