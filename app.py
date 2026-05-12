@@ -759,7 +759,8 @@ def main():
                     if not pages:
                         continue
 
-                    nav_pages = []
+                    nav_pages     = []
+                    cat_spec_path = None  # spec path for this category (from first endpoint page)
 
                     for page in pages:
                         page_title = page.get("title", "")
@@ -810,6 +811,9 @@ def main():
 
                         # Build MDX with openapi frontmatter if we have method+path+spec
                         if api_method and api_path and spec_rel_path:
+                            # Capture the category's spec from the first endpoint page
+                            if cat_spec_path is None:
+                                cat_spec_path = spec_rel_path
                             mdx_content = build_endpoint_mdx(
                                 page_title, page_slug, spec_rel_path, api_method, api_path
                             )
@@ -828,10 +832,16 @@ def main():
                             nav_pages.append(mdx_nav_path)
 
                     if nav_pages:
-                        version_groups.append({
+                        # Determine the dominant spec for this category
+                        # by finding which spec was most referenced by pages in it
+                        group_entry = {
                             "group": cat_title,
                             "pages": nav_pages
-                        })
+                        }
+                        # Add openapi field pointing to the owning spec if we can determine it
+                        if cat_spec_path:
+                            group_entry["openapi"] = cat_spec_path
+                        version_groups.append(group_entry)
 
                 st.success(f"✅ Generated MDX pages for **{len(version_groups)}** categories")
 
