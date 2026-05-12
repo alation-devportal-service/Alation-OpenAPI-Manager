@@ -9,7 +9,18 @@ import urllib.parse
 import tarfile
 import re
 import base64
+from datetime import date, datetime
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# JSON ENCODER — handles datetime objects that yaml.safe_load() produces
+# ---------------------------------------------------------------------------
+
+class SafeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
 
 # ---------------------------------------------------------------------------
 # PAGE CONFIG
@@ -673,7 +684,7 @@ def main():
                                     prepped = prep_openapi_file(candidate, display_version, readme_slug)
                                     with open(prepped, "r") as f:
                                         spec_data = yaml.safe_load(f)
-                                    spec_content = json.dumps(spec_data, indent=2).encode("utf-8")
+                                    spec_content = json.dumps(spec_data, indent=2, cls=SafeEncoder).encode("utf-8")
                                     prepped.unlink()
                                     used_eng_key = eng_key
                                 except Exception as e:
