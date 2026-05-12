@@ -132,7 +132,7 @@ def get_reference_page(readme_version, page_slug, readme_key):
     """
     Returns full detail for a single reference page including:
     - api.method, api.path  (HTTP method and endpoint path)
-    - data.uri              (contains the owning spec filename)
+    - api.schema.info.title (owning spec title for matching)
     Calls GET /branches/{branch}/reference/{slug}
     """
     resp = readme_get(
@@ -142,9 +142,11 @@ def get_reference_page(readme_version, page_slug, readme_key):
     if resp.status_code != 200:
         return None
     return resp.json().get("data", {})
+
+def get_category_pages(readme_version, category_title, readme_key):
     """
     Returns ordered list of pages for a reference category.
-    Each page has: title, slug, position, api (method + path), type.
+    Each page has: title, slug, position, type.
     Calls GET /branches/{branch}/categories/reference/{title}/pages
     """
     resp = readme_get(
