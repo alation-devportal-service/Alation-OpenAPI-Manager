@@ -785,7 +785,9 @@ def main():
                         page_title = page.get("title", "")
                         page_slug  = page.get("slug", "")
 
-                        # Look up this page's endpoint in the local spec index
+                        # Look up this page's endpoint in the local spec index.
+                        # ReadMe uses operationId as the page slug, just lowercased.
+                        # e.g. operationId "createAPIAccessToken" → slug "createapiaccesstoken"
                         api_method    = ""
                         api_path      = ""
                         spec_rel_path = None
@@ -793,14 +795,11 @@ def main():
                         for readme_slug, paths in spec_path_index.items():
                             for path, methods in paths.items():
                                 for method in methods.keys():
-                                    # Match by operationId or summary against page slug/title
                                     op = methods[method]
                                     if not isinstance(op, dict):
                                         continue
-                                    op_id = op.get("operationId", "").lower()
-                                    # Slugify operationId to compare with page slug
-                                    op_slug = re.sub(r"[^a-z0-9]+", "-", op_id).strip("-")
-                                    if op_slug == page_slug or op_id == page_slug:
+                                    op_id = op.get("operationId", "")
+                                    if op_id.lower() == page_slug.lower():
                                         api_method    = method
                                         api_path      = path
                                         spec_rel_path = committed_specs[readme_slug]
