@@ -748,22 +748,31 @@ def main():
                 # Used to match ReadMe page slugs to endpoint operationIds
                 # without per-page ReadMe API calls.
                 # ==============================================================
-                spec_path_index = {}
-                with st.spinner("Building spec path index..."):
-                    for readme_slug, rel_path in committed_specs.items():
-                        spec_url = (
-                            f"https://api.github.com/repos/{mintlify_repo}"
-                            f"/contents/{API_REF_BASE}/{display_version}/{readme_slug}.json"
-                        )
-                        spec_resp = gh_get(spec_url, git_token, params={"ref": MINTLIFY_BRANCH})
-                        if spec_resp.status_code == 200:
-                            try:
-                                spec_data = json.loads(
-                                    base64.b64decode(spec_resp.json()["content"])
-                                )
-                                spec_path_index[readme_slug] = spec_data.get("paths", {})
-                            except Exception:
-                                spec_path_index[readme_slug] = {}
+                # STEP 4: Build spec path index in memory from the spec content
+                # we already loaded in Step 3. No extra GitHub API calls needed.
+                # Maps: readme_slug → {"/path/": {"method": op_data, ...}}
+                # ==============================================================
+                spec_path_index  = {}
+
+                # Re-load each committed spec from the eng repo to build index
+                for filename in sorted(branch_slugs):
+                    readme_slug = re.sub(r"\.(json|yaml|yml)$", "", filename)
+                    if readme_slug not in committed_specs:
+                        continue
+                    eng_keys = reverse_mapping.get(readme_slug, [])
+                    for eng_key in eng_keys:
+                        for spec_dir in [path_main, path_logical]:
+                            candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
+                            if candidate.exists():
+                                try:
+                                    raw = prep_spec_content(candidate, display_version, readme_slug)
+                                    spec_json = json.loads(raw)
+                                    spec_path_index[readme_slug] = spec_json.get("paths", {})
+                                except Exception:
+                                    spec_path_index[readme_slug] = {}
+                                break
+                        if readme_slug in spec_path_index:
+                            break
 
                 # ==============================================================
                 # STEP 5: For each category, fetch its pages from ReadMe.
@@ -818,7 +827,8 @@ def main():
                         # --- Build MDX content ---
                         mdx_filename  = slug_to_mdx_filename(page_slug)
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
-                        mdx_nav_path  = f"api-reference/{display_version}/{page_slug}"
+                        # Nav path must match the MDX filename exactly (no extension)
+                        mdx_nav_path  = f"api-reference/{display_version}/{mdx_filename[:-4]}"
 
                         if api_method and api_path and spec_rel_path:
                             # Endpoint page — use openapi frontmatter
