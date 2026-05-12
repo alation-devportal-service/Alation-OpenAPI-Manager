@@ -78,6 +78,8 @@ def readme_branch(readme_version):
     The ReadMe UI displays 'v2026.5.0-0' but the API expects '2026.5.0-0'.
     """
     return readme_version.lstrip("v")
+
+def readme_get(path, readme_key, params=None):
     """GET against the ReadMe v2 API."""
     return requests.get(
         f"https://api.readme.com/v2{path}",
