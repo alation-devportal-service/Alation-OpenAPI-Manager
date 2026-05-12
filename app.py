@@ -13,6 +13,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------------------------
+st.set_page_config(page_title="Alation OpenAPI Manager", page_icon="📘", layout="wide")
+
+# ---------------------------------------------------------------------------
 # JSON ENCODER — handles datetime objects that yaml.safe_load() produces
 # ---------------------------------------------------------------------------
 
@@ -21,11 +26,6 @@ class SafeEncoder(json.JSONEncoder):
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
         return super().default(obj)
-
-# ---------------------------------------------------------------------------
-# PAGE CONFIG
-# ---------------------------------------------------------------------------
-st.set_page_config(page_title="Alation OpenAPI Manager", page_icon="📘", layout="wide")
 
 # ---------------------------------------------------------------------------
 # GITHUB HELPERS
@@ -58,14 +58,18 @@ def save_slug_mapping(repo_name, token, updated_mapping, sha):
     encoded = base64.b64encode(
         json.dumps(updated_mapping, indent=4).encode("utf-8")
     ).decode("utf-8")
-    payload = {"message": "🤖 Auto-update: Added new API slug mapping", "content": encoded, "branch": "main"}
+    payload = {
+        "message": "🤖 Auto-update: Added new API slug mapping",
+        "content": encoded,
+        "branch": "main",
+    }
     if sha:
         payload["sha"] = sha
     resp = gh_put(url, token, payload)
     return resp.status_code in [200, 201]
 
 def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message, retries=2):
-    """Creates or updates a file on a GitHub branch. Retries on SHA conflict. Returns (ok, response)."""
+    """Creates or updates a file on a GitHub branch. Retries on SHA conflict."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     for attempt in range(retries + 1):
         existing = gh_get(url, token, params={"ref": branch})
@@ -80,7 +84,6 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
         resp = gh_put(url, token, payload)
         if resp.status_code in [200, 201]:
             return True, resp
-        # 409 Conflict = SHA mismatch, retry by re-fetching SHA
         if resp.status_code == 409 and attempt < retries:
             continue
         return False, resp
@@ -91,10 +94,7 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
 # ---------------------------------------------------------------------------
 
 def readme_branch(readme_version):
-    """
-    Strips the leading 'v' from a ReadMe version slug for use in API calls.
-    The ReadMe UI displays 'v2026.5.0-0' but the API expects '2026.5.0-0'.
-    """
+    """Strip leading 'v' — ReadMe UI shows 'v2026.5.0-0', API expects '2026.5.0-0'."""
     return readme_version.lstrip("v")
 
 def readme_get(path, readme_key, params=None):
@@ -102,14 +102,11 @@ def readme_get(path, readme_key, params=None):
     return requests.get(
         f"https://api.readme.com/v2{path}",
         headers={"Authorization": f"Bearer {readme_key}"},
-        params=params
+        params=params,
     )
 
 def get_branch_api_slugs(readme_version, readme_key):
-    """
-    Returns the set of spec filenames (e.g. 'alation-agent-api.json')
-    that exist for the given branch, by calling GET /branches/{branch}/apis.
-    """
+    """Returns set of spec filenames for this branch via GET /branches/{branch}/apis."""
     resp = readme_get(f"/branches/{readme_branch(readme_version)}/apis", readme_key)
     if resp.status_code != 200:
         return set(), resp.text
@@ -117,55 +114,45 @@ def get_branch_api_slugs(readme_version, readme_key):
     return {item["filename"] for item in items}, None
 
 def get_branch_reference_categories(readme_version, readme_key):
-    """
-    Returns ordered list of reference categories for the branch.
-    Each category has: title, uri, position.
-    Calls GET /branches/{branch}/categories/reference
-    """
+    """Returns ordered list of reference categories via GET /branches/{branch}/categories/reference."""
     resp = readme_get(f"/branches/{readme_branch(readme_version)}/categories/reference", readme_key)
     if resp.status_code != 200:
         return [], resp.text
-    categories = resp.json().get("data", [])
-    return sorted(categories, key=lambda c: c.get("position", 0)), None
-
-def get_reference_page(readme_version, page_slug, readme_key):
-    """
-    Returns full detail for a single reference page including:
-    - api.method, api.path  (HTTP method and endpoint path)
-    - api.schema.info.title (owning spec title for matching)
-    Calls GET /branches/{branch}/reference/{slug}
-    """
-    resp = readme_get(
-        f"/branches/{readme_branch(readme_version)}/reference/{page_slug}",
-        readme_key
-    )
-    if resp.status_code != 200:
-        return None
-    return resp.json().get("data", {})
+    cats = resp.json().get("data", [])
+    return sorted(cats, key=lambda c: c.get("position", 0)), None
 
 def get_category_pages(readme_version, category_title, readme_key):
-    """
-    Returns ordered list of pages for a reference category.
-    Each page has: title, slug, position, type.
-    Calls GET /branches/{branch}/categories/reference/{title}/pages
-    """
+    """Returns ordered pages for a category via GET /branches/{branch}/categories/reference/{title}/pages."""
     resp = readme_get(
         f"/branches/{readme_branch(readme_version)}/categories/reference/{category_title}/pages",
-        readme_key
+        readme_key,
     )
     if resp.status_code != 200:
         return [], resp.text
     pages = resp.json().get("data", [])
     return sorted(pages, key=lambda p: p.get("position", 0)), None
 
+def get_reference_page(readme_version, page_slug, readme_key):
+    """
+    Returns full detail for a single reference page via GET /branches/{branch}/reference/{slug}.
+    Used to fetch Markdown body content for non-endpoint (overview) pages.
+    """
+    resp = readme_get(
+        f"/branches/{readme_branch(readme_version)}/reference/{page_slug}",
+        readme_key,
+    )
+    if resp.status_code != 200:
+        return None
+    return resp.json().get("data", {})
+
 # ---------------------------------------------------------------------------
 # NODE.JS SETUP
 # ---------------------------------------------------------------------------
 
 def ensure_node_installed():
-    node_version = "v20.17.0"
-    install_dir = Path("./node_runtime")
-    node_dirname = f"node-{node_version}-linux-x64"
+    node_version  = "v20.17.0"
+    install_dir   = Path("./node_runtime")
+    node_dirname  = f"node-{node_version}-linux-x64"
     node_bin_path = install_dir / node_dirname / "bin"
 
     try:
@@ -176,8 +163,8 @@ def ensure_node_installed():
 
     if not node_bin_path.exists():
         with st.spinner("🔧 Initializing environment (Node.js)..."):
-            url = f"https://nodejs.org/dist/{node_version}/{node_dirname}.tar.xz"
-            resp = requests.get(url, stream=True)
+            url      = f"https://nodejs.org/dist/{node_version}/{node_dirname}.tar.xz"
+            resp     = requests.get(url, stream=True)
             tar_path = Path("node.tar.xz")
             with open(tar_path, "wb") as f:
                 f.write(resp.raw.read())
@@ -197,8 +184,8 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
         if s:
             display_cmd = display_cmd.replace(s, "***")
     st.write(f"*> Running: {display_cmd}*")
-    run_env = os.environ.copy()
-    run_env["CI"] = "true"
+    run_env        = os.environ.copy()
+    run_env["CI"]  = "true"
     process = subprocess.Popen(
         cmd_string, shell=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -214,13 +201,39 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     return process.returncode
 
 # ---------------------------------------------------------------------------
-# OPENAPI FILE PREP (for ReadMe upload)
+# OPENAPI FILE PREP
+# Used by Tab 1 (Git Repo Pipeline) and Tab 2 (Manual Upload) for ReadMe uploads.
+# Also used internally by prep_spec_content for the Mintlify migration.
 # ---------------------------------------------------------------------------
+
+def prep_openapi_file(filepath, version, target_slug):
+    """Writes a prepped YAML file next to the source for CLI validation/upload."""
+    with open(filepath, "r") as f:
+        data = yaml.safe_load(f)
+    if "info" not in data:
+        data["info"] = {}
+    data["info"]["version"] = version
+    if "x-readme" not in data:
+        data["x-readme"] = {}
+    data["x-readme"]["explorer-enabled"] = False
+    data["x-readme"]["proxy-enabled"]    = True
+    if "servers" in data and isinstance(data["servers"], list):
+        for server in data["servers"]:
+            if "variables" in server:
+                if "protocol" in server["variables"]:
+                    server["variables"]["protocol"]["default"] = "https"
+                if "base-url" in server["variables"]:
+                    server["variables"]["base-url"]["default"] = "alation_domain"
+    yaml_filepath = filepath.parent / f"{target_slug}_prepped.yaml"
+    with open(yaml_filepath, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    return yaml_filepath
 
 def prep_spec_content(filepath, version, readme_slug):
     """
-    Loads a YAML spec, applies ReadMe/Mintlify prep transformations,
-    and returns the result as JSON bytes. No temp files written.
+    Loads a YAML spec, applies prep transformations in memory,
+    and returns JSON bytes. No temp files written.
+    Used by the Mintlify migration (Tab 3).
     """
     with open(filepath, "r") as f:
         data = yaml.safe_load(f)
@@ -243,36 +256,40 @@ def prep_spec_content(filepath, version, readme_slug):
     return json.dumps(data, indent=2, cls=SafeEncoder).encode("utf-8")
 
 # ---------------------------------------------------------------------------
-# MDX GENERATION HELPERS
+# MDX BUILDERS
 # ---------------------------------------------------------------------------
 
 def slug_to_mdx_filename(slug):
     """Converts a ReadMe page slug to a safe MDX filename."""
     return re.sub(r"[^a-z0-9-]", "-", slug.lower()).strip("-") + ".mdx"
 
-def build_endpoint_mdx(page_title, page_slug, spec_rel_path, method, api_path):
+def build_endpoint_mdx(page_title, spec_rel_path, method, api_path):
     """
-    Builds an MDX file for an individual API endpoint page.
-    Uses the ReadMe page title and slug exactly as they appear in ReadMe.
-    The openapi frontmatter field tells Mintlify which spec + endpoint to render.
+    MDX for an API endpoint page.
+    The openapi frontmatter tells Mintlify which spec + endpoint to render.
     """
-    frontmatter = f"""---
-title: "{page_title}"
-openapi: "{spec_rel_path} {method.upper()} {api_path}"
----
-"""
-    return frontmatter.encode("utf-8")
+    # Escape any double quotes in the title
+    safe_title = page_title.replace('"', '\\"')
+    return (
+        f'---\n'
+        f'title: "{safe_title}"\n'
+        f'openapi: "{spec_rel_path} {method.upper()} {api_path}"\n'
+        f'---\n'
+    ).encode("utf-8")
 
-def build_overview_mdx(page_title, page_slug):
+def build_content_mdx(page_title, body):
     """
-    Builds an MDX file for non-endpoint reference pages
-    (e.g. overview, authentication pages within a category).
+    MDX for a non-endpoint page (overview, authentication, custom content).
+    Includes the Markdown body pulled from ReadMe so the page is not empty.
     """
-    frontmatter = f"""---
-title: "{page_title}"
----
-"""
-    return frontmatter.encode("utf-8")
+    safe_title = page_title.replace('"', '\\"')
+    content    = body.strip() if body else ""
+    return (
+        f'---\n'
+        f'title: "{safe_title}"\n'
+        f'---\n\n'
+        f'{content}\n'
+    ).encode("utf-8")
 
 # ---------------------------------------------------------------------------
 # MINTLIFY CONSTANTS
@@ -337,8 +354,7 @@ def main():
     else:
         st.error("⚠️ Missing Service Account secrets! Cannot load or save slug mappings.")
 
-    # Build reverse mapping: readme_slug → list of possible eng_keys
-    # e.g. "cde" → ["cde-public-api-fixed", "cde-public-api"]
+    # Build reverse mapping: readme_slug → [eng_key, ...]
     reverse_mapping = {}
     for eng_key, readme_slug in current_mapping.items():
         reverse_mapping.setdefault(readme_slug, []).append(eng_key)
@@ -359,13 +375,14 @@ def main():
         workspace_dir.mkdir()
         parsed   = urllib.parse.urlparse(eng_repo_url)
         auth_url = urllib.parse.urlunparse((
-            parsed.scheme, f"{git_user}:{git_token}@{parsed.netloc}",
+            parsed.scheme,
+            f"{git_user}:{git_token}@{parsed.netloc}",
             parsed.path, "", "", ""
         ))
         with st.spinner("Cloning engineering repo..."):
             p = subprocess.run(
                 ["git", "clone", "--depth", "1", "--branch", eng_branch, auth_url, str(workspace_dir)],
-                capture_output=True
+                capture_output=True,
             )
             if p.returncode == 0:
                 st.success("✅ Specs pulled.")
@@ -377,7 +394,7 @@ def main():
     tab_git, tab_manual, tab_mintlify = st.tabs([
         "🐙 Git Repo Pipeline",
         "📂 Manual File Upload",
-        "🌿 Pull to Mintlify"
+        "🌿 Pull to Mintlify",
     ])
 
     # =========================================================================
@@ -553,10 +570,11 @@ def main():
         st.subheader("🌿 Migrate ReadMe → Mintlify Branch")
         st.info(
             "For each selected version this tab will:\n"
-            "1. Pull the spec list and category structure from ReadMe v2 API\n"
+            "1. Pull spec list and category structure from ReadMe v2 API\n"
             "2. Source spec content from the engineering repo YAML\n"
             "3. Commit spec JSON files to the Mintlify branch\n"
-            "4. Generate MDX pages using ReadMe titles and slugs\n"
+            "4. Generate MDX pages — endpoint pages with openapi frontmatter,\n"
+            "   overview/content pages with Markdown body pulled from ReadMe\n"
             "5. Patch `docs.json` to mirror ReadMe's navigation exactly"
         )
         st.caption(f"🎯 Target: `{mintlify_repo}` → `{MINTLIFY_BRANCH}`")
@@ -566,51 +584,43 @@ def main():
             options=list(VERSION_MAP.keys()),
             format_func=lambda v: f"{VERSION_MAP[v]}  ({v})",
             default=["v2026.5.0-0"],
-            help="ReadMe branch slug → canonical display version"
+            help="ReadMe branch slug → canonical display version",
         )
 
-        # --- Debug expander: inspect raw ReadMe API responses ---
+        # --- Debug expander ---
         with st.expander("🔬 Debug: Inspect ReadMe API responses"):
-            st.caption(
-                "Use this to inspect the raw API response from ReadMe before running "
-                "the full migration. Helps verify what fields are available on reference pages."
-            )
+            st.caption("Inspect raw ReadMe API responses to verify field availability.")
             debug_version = st.selectbox(
                 "Version to inspect",
                 options=list(VERSION_MAP.keys()),
                 format_func=lambda v: f"{VERSION_MAP[v]}  ({v})",
-                key="debug_version"
+                key="debug_version",
             )
             col_d1, col_d2, col_d3 = st.columns(3)
-
             with col_d1:
                 if st.button("📋 Inspect Spec List"):
                     resp = readme_get(f"/branches/{readme_branch(debug_version)}/apis", readme_key)
                     st.write(f"**Status:** {resp.status_code}")
                     st.json(resp.json())
-
             with col_d2:
                 if st.button("📂 Inspect Categories"):
                     resp = readme_get(f"/branches/{readme_branch(debug_version)}/categories/reference", readme_key)
                     st.write(f"**Status:** {resp.status_code}")
                     st.json(resp.json())
-
             with col_d3:
                 debug_cat = st.text_input("Category title to inspect pages", key="debug_cat")
                 if st.button("📄 Inspect Category Pages") and debug_cat:
                     resp = readme_get(
                         f"/branches/{readme_branch(debug_version)}/categories/reference/{debug_cat}/pages",
-                        readme_key
+                        readme_key,
                     )
                     st.write(f"**Status:** {resp.status_code}")
                     st.json(resp.json())
-
-            # Also let them inspect a single reference page by slug
             debug_slug = st.text_input("Reference page slug to inspect", key="debug_slug")
             if st.button("🔍 Inspect Single Reference Page") and debug_slug:
                 resp = readme_get(
                     f"/branches/{readme_branch(debug_version)}/reference/{debug_slug}",
-                    readme_key
+                    readme_key,
                 )
                 st.write(f"**Status:** {resp.status_code}")
                 st.json(resp.json())
@@ -634,7 +644,7 @@ def main():
                 st.error("❌ Engineering repo not pulled. Click '1. Pull Specs' first.")
                 st.stop()
 
-            all_version_dropdowns = []  # final docs.json structure
+            all_version_dropdowns = []
             any_failures          = False
 
             for readme_version in selected_versions:
@@ -642,9 +652,9 @@ def main():
                 st.markdown(f"---\n#### 📦 `{display_version}` (ReadMe: `{readme_version}`)")
 
                 # ==============================================================
-                # STEP 1: Get the list of spec slugs for this version from ReadMe
+                # STEP 1: Get spec list from ReadMe for this version
                 # ==============================================================
-                with st.spinner(f"Fetching spec list for `{readme_version}`..."):
+                with st.spinner("Fetching spec list from ReadMe..."):
                     branch_slugs, err = get_branch_api_slugs(readme_version, readme_key)
                 if err:
                     st.error(f"❌ Failed to fetch spec list: {err}")
@@ -653,9 +663,9 @@ def main():
                 st.write(f"📋 Found **{len(branch_slugs)}** spec(s) in ReadMe for this version")
 
                 # ==============================================================
-                # STEP 2: Get reference categories (ordered) from ReadMe
+                # STEP 2: Get reference categories from ReadMe
                 # ==============================================================
-                with st.spinner(f"Fetching reference categories for `{readme_version}`..."):
+                with st.spinner("Fetching reference categories from ReadMe..."):
                     categories, err = get_branch_reference_categories(readme_version, readme_key)
                 if err:
                     st.error(f"❌ Failed to fetch categories: {err}")
@@ -664,33 +674,28 @@ def main():
                 st.write(f"📂 Found **{len(categories)}** reference categories")
 
                 # ==============================================================
-                # STEP 3: For each spec ReadMe has for this version, use
-                # slug_mapping.json to find the exact YAML in the eng repo.
+                # STEP 3: For each spec ReadMe has for this version, find the
+                # YAML in the eng repo using slug_mapping.json, prep it, and
+                # commit as JSON to the Mintlify branch.
                 #
                 # Flow:
-                #   ReadMe filename → readme_slug
-                #   slug_mapping (reversed) → eng_key
-                #   eng repo → {eng_key}.yaml
+                #   ReadMe filename  →  readme_slug  (strip extension)
+                #   slug_mapping rev →  eng_key      (e.g. "agent")
+                #   eng repo         →  {eng_key}.yaml
                 # ==============================================================
-                committed_specs = {}  # readme_slug → repo-relative path
+                committed_specs = {}   # readme_slug → "api-reference/{ver}/{slug}.json"
                 skipped_specs   = []
                 failed_specs    = []
 
                 for filename in sorted(branch_slugs):
-                    # Strip extension to get the ReadMe slug
-                    # e.g. "alation-agent-api.json" → "alation-agent-api"
                     readme_slug = re.sub(r"\.(json|yaml|yml)$", "", filename)
+                    eng_keys    = reverse_mapping.get(readme_slug)
 
-                    # Look up the eng_key using slug_mapping (reversed)
-                    # e.g. "alation-agent-api" → ["agent"]
-                    eng_keys = reverse_mapping.get(readme_slug)
                     if not eng_keys:
                         skipped_specs.append(readme_slug)
                         st.warning(f"⚠️ `{readme_slug}`: not in slug_mapping.json — skipping.")
                         continue
 
-                    # Find the YAML in the pulled eng repo using the eng_key
-                    # slug_mapping guarantees the filename: eng_key + ".yaml"
                     spec_content = None
                     used_eng_key = None
                     for eng_key in eng_keys:
@@ -702,13 +707,11 @@ def main():
                                     used_eng_key = eng_key
                                 except Exception as e:
                                     st.error(f"❌ `{readme_slug}`: failed to prep `{eng_key}.yaml` — {e}")
-                                break  # found the file, stop searching dirs
+                                break
                         if spec_content is not None:
-                            break  # found a working eng_key, stop trying others
+                            break
 
                     if spec_content is None:
-                        # The YAML should exist since slug_mapping.json defines it —
-                        # if it's missing the eng repo may need to be re-pulled.
                         skipped_specs.append(readme_slug)
                         tried = ", ".join(f"`{k}.yaml`" for k in eng_keys)
                         st.error(
@@ -717,7 +720,6 @@ def main():
                         )
                         continue
 
-                    # Commit the prepped spec JSON to the Mintlify branch
                     spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.json"
                     ok, put_resp   = commit_file_to_branch(
                         repo          = mintlify_repo,
@@ -725,7 +727,7 @@ def main():
                         branch        = MINTLIFY_BRANCH,
                         file_path     = spec_repo_path,
                         content_bytes = spec_content,
-                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_eng_key}.yaml"
+                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_eng_key}.yaml",
                     )
                     if ok:
                         committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.json"
@@ -741,30 +743,36 @@ def main():
                     st.warning(f"⚠️ Failed: {', '.join(f'`{s}`' for s in failed_specs)}")
 
                 # ==============================================================
-                # STEP 4: Build a local index of all spec paths, then for each
-                # category fetch its pages from ReadMe, look up method + path
-                # from the local spec index, generate MDX, and commit.
-                # This avoids one ReadMe API call per page (hundreds of calls).
+                # STEP 4: Build a local spec path index from committed spec JSON
+                # files. Maps: readme_slug → {"/path/": {"method": op_data}}
+                # Used to match ReadMe page slugs to endpoint operationIds
+                # without per-page ReadMe API calls.
                 # ==============================================================
-
-                # Build index: {readme_slug: {"/path/": {"post": True, ...}}}
-                # by reading the committed spec JSON files via GitHub API
                 spec_path_index = {}
-                for readme_slug, rel_path in committed_specs.items():
-                    spec_url = (
-                        f"https://api.github.com/repos/{mintlify_repo}"
-                        f"/contents/{API_REF_BASE}/{display_version}/{readme_slug}.json"
-                    )
-                    spec_resp = gh_get(spec_url, git_token, params={"ref": MINTLIFY_BRANCH})
-                    if spec_resp.status_code == 200:
-                        try:
-                            spec_data = json.loads(
-                                base64.b64decode(spec_resp.json()["content"])
-                            )
-                            spec_path_index[readme_slug] = spec_data.get("paths", {})
-                        except Exception:
-                            spec_path_index[readme_slug] = {}
+                with st.spinner("Building spec path index..."):
+                    for readme_slug, rel_path in committed_specs.items():
+                        spec_url = (
+                            f"https://api.github.com/repos/{mintlify_repo}"
+                            f"/contents/{API_REF_BASE}/{display_version}/{readme_slug}.json"
+                        )
+                        spec_resp = gh_get(spec_url, git_token, params={"ref": MINTLIFY_BRANCH})
+                        if spec_resp.status_code == 200:
+                            try:
+                                spec_data = json.loads(
+                                    base64.b64decode(spec_resp.json()["content"])
+                                )
+                                spec_path_index[readme_slug] = spec_data.get("paths", {})
+                            except Exception:
+                                spec_path_index[readme_slug] = {}
 
+                # ==============================================================
+                # STEP 5: For each category, fetch its pages from ReadMe.
+                # For endpoint pages: match operationId to page slug using the
+                # local spec index, build openapi frontmatter MDX.
+                # For non-endpoint pages (overview, content): call the individual
+                # ReadMe reference page endpoint to get the Markdown body, and
+                # include it in the MDX so the page is not empty.
+                # ==============================================================
                 version_groups = []
 
                 for category in categories:
@@ -774,7 +782,6 @@ def main():
                     if err:
                         st.warning(f"⚠️ Could not fetch pages for `{cat_title}`: {err}")
                         continue
-
                     if not pages:
                         continue
 
@@ -783,10 +790,10 @@ def main():
 
                     for page in pages:
                         page_title = page.get("title", "")
-                        page_slug  = page.get("slug", "")
+                        page_slug  = page.get("slug",  "")
 
-                        # Look up this page's endpoint in the local spec index.
-                        # ReadMe uses operationId as the page slug, just lowercased.
+                        # --- Try to match to an endpoint in the spec index ---
+                        # ReadMe uses operationId as the page slug, lowercased.
                         # e.g. operationId "createAPIAccessToken" → slug "createapiaccesstoken"
                         api_method    = ""
                         api_path      = ""
@@ -794,8 +801,7 @@ def main():
 
                         for readme_slug, paths in spec_path_index.items():
                             for path, methods in paths.items():
-                                for method in methods.keys():
-                                    op = methods[method]
+                                for method, op in methods.items():
                                     if not isinstance(op, dict):
                                         continue
                                     op_id = op.get("operationId", "")
@@ -809,38 +815,46 @@ def main():
                             if api_path:
                                 break
 
+                        # --- Build MDX content ---
                         mdx_filename  = slug_to_mdx_filename(page_slug)
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
                         mdx_nav_path  = f"api-reference/{display_version}/{page_slug}"
 
                         if api_method and api_path and spec_rel_path:
+                            # Endpoint page — use openapi frontmatter
                             if cat_spec_path is None:
                                 cat_spec_path = spec_rel_path
                             mdx_content = build_endpoint_mdx(
-                                page_title, page_slug, spec_rel_path, api_method, api_path
+                                page_title, spec_rel_path, api_method, api_path
                             )
                         else:
-                            mdx_content = build_overview_mdx(page_title, page_slug)
+                            # Non-endpoint page (overview, authentication, custom content)
+                            # Fetch the Markdown body from ReadMe so the page is not empty
+                            detail = get_reference_page(readme_version, page_slug, readme_key)
+                            body   = ""
+                            if detail:
+                                body = (detail.get("content") or {}).get("body") or ""
+                            mdx_content = build_content_mdx(page_title, body)
 
+                        # --- Commit MDX to branch ---
                         ok, _ = commit_file_to_branch(
                             repo          = mintlify_repo,
                             token         = git_token,
                             branch        = MINTLIFY_BRANCH,
                             file_path     = mdx_repo_path,
                             content_bytes = mdx_content,
-                            message       = f"🤖 MDX: {page_slug} ({display_version})"
+                            message       = f"🤖 MDX: {page_slug} ({display_version})",
                         )
                         if ok:
                             nav_pages.append(mdx_nav_path)
 
                     if nav_pages:
-                        # Determine the dominant spec for this category
-                        # by finding which spec was most referenced by pages in it
                         group_entry = {
                             "group": cat_title,
-                            "pages": nav_pages
+                            "pages": nav_pages,
                         }
-                        # Add openapi field pointing to the owning spec if we can determine it
+                        # Add group-level openapi field so Mintlify knows which
+                        # spec to load for this group's endpoint pages
                         if cat_spec_path:
                             group_entry["openapi"] = cat_spec_path
                         version_groups.append(group_entry)
@@ -849,11 +863,11 @@ def main():
 
                 all_version_dropdowns.append({
                     "dropdown": display_version,
-                    "groups":   version_groups
+                    "groups":   version_groups,
                 })
 
             # ==================================================================
-            # STEP 5: Patch docs.json with the full versioned structure
+            # STEP 6: Patch docs.json with the full versioned navigation
             # ==================================================================
             st.markdown("---\n#### 📝 Patching `docs.json`")
 
@@ -886,7 +900,7 @@ def main():
                         message       = (
                             "🤖 Update docs.json API Reference for: "
                             + ", ".join(VERSION_MAP[v] for v in selected_versions)
-                        )
+                        ),
                     )
                     if ok:
                         if any_failures:
