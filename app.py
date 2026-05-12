@@ -599,6 +599,12 @@ def main():
                             "Check that the tab name matches exactly."
                         )
                     else:
+                        # Show the API Reference tab as it will be committed
+                        for tab in docs_data.get("navigation", {}).get("tabs", []):
+                            if tab.get("tab") == "API Reference":
+                                st.write("**Preview of API Reference tab in docs.json:**")
+                                st.json(tab)
+                                break
                         updated_content = base64.b64encode(
                             json.dumps(docs_data, indent=2).encode("utf-8")
                         ).decode("utf-8")
