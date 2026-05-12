@@ -374,7 +374,8 @@ def main():
 
         MINTLIFY_REPO = st.secrets.get("MINTLIFY_REPO_NAME", "")
         MINTLIFY_BRANCH = "elena/testNavigationChanges"
-        DOCS_JSON_PATH = "docs.json"
+        DOCS_JSON_PATH = "mintlify-poc-docs/docs.json"
+        API_REF_BASE = "mintlify-poc-docs/api-reference"
 
         # Full version map: ReadMe slug → canonical display name
         VERSION_MAP = {
@@ -440,7 +441,7 @@ def main():
 
                     for eng_key, readme_slug in current_mapping.items():
                         fetch_url = (
-                            f"https://api.readme.com/v2/openapi/{readme_slug}.json"
+                            f"https://api.readme.com/v2/openapi/{readme_slug}"
                             f"?version={readme_version}"
                         )
                         resp = requests.get(
@@ -450,7 +451,7 @@ def main():
 
                         if resp.status_code == 200:
                             file_path_in_repo = (
-                                f"api-reference/{display_version}/{readme_slug}.json"
+                                f"{API_REF_BASE}/{display_version}/{readme_slug}.json"
                             )
                             commit_url = (
                                 f"https://api.github.com/repos/{MINTLIFY_REPO}"
@@ -490,7 +491,7 @@ def main():
                                 group_name = readme_slug.replace("-", " ").title()
                                 groups.append({
                                     "group": group_name,
-                                    "openapi": file_path_in_repo
+                                    "openapi": f"api-reference/{display_version}/{readme_slug}.json"
                                 })
                             else:
                                 failed.append(readme_slug)
