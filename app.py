@@ -82,7 +82,7 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
 # ---------------------------------------------------------------------------
 
 def ensure_node_installed():
-    node_version = "v20.11.0"
+    node_version = "v20.17.0"
     install_dir = Path("./node_runtime")
     node_dirname = f"node-{node_version}-linux-x64"
     node_bin_path = install_dir / node_dirname / "bin"
@@ -528,24 +528,60 @@ def main():
                         continue
 
                     # ----------------------------------------------------------
-                    # STEP 2: Get raw spec content
-                    # The v2 GET returns metadata; raw content is at source.url
-                    # if uploaded via URL, or re-fetched with octet-stream if CLI.
+                    # STEP 2: Get raw spec content.
+                    # The v2 GET /branches/{branch}/apis/{slug}.json returns a
+                    # metadata wrapper {"data": {...}}, NOT the raw spec.
+                    # Use rdme CLI to download the actual raw spec file.
                     # ----------------------------------------------------------
                     resp_data  = resp.json().get("data", {})
                     source_url = (resp_data.get("source") or {}).get("url")
 
                     if source_url:
+                        # Uploaded via URL — fetch raw spec directly
                         spec_content = requests.get(source_url).content
                     else:
-                        raw_resp     = requests.get(
-                            fetch_url,
-                            headers={
-                                "Authorization": f"Bearer {readme_key}",
-                                "Accept": "application/octet-stream"
-                            }
+                        # CLI-uploaded — use rdme to download the raw spec
+                        local_dl_dir  = Path(f"./mintlify_scratch/{display_version}")
+                        local_dl_dir.mkdir(parents=True, exist_ok=True)
+                        local_dl_path = local_dl_dir / f"{readme_slug}.json"
+
+                        dl_cmd = (
+                            f"npx --yes rdme openapi download "
+                            f"--key {readme_key} "
+                            f"--slug {readme_slug}.json "
+                            f"--branch {readme_version} "
+                            f"--out {local_dl_path}"
                         )
-                        spec_content = raw_resp.content
+                        dl_result = subprocess.run(
+                            dl_cmd, shell=True,
+                            capture_output=True, text=True,
+                            env={**os.environ, "CI": "true"}
+                        )
+
+                        if dl_result.returncode == 0 and local_dl_path.exists():
+                            spec_content = local_dl_path.read_bytes()
+                        else:
+                            failed.append(readme_slug)
+                            any_failures = True
+                            st.error(
+                                f"❌ `{readme_slug}`: rdme download failed. "
+                                f"stderr: {dl_result.stderr[:300]}"
+                            )
+                            continue
+
+                    # Sanity check: confirm we have a real OpenAPI spec
+                    try:
+                        spec_json = json.loads(spec_content)
+                        if "openapi" not in spec_json and "swagger" not in spec_json:
+                            failed.append(readme_slug)
+                            any_failures = True
+                            st.error(
+                                f"❌ `{readme_slug}`: fetched content is not a valid OpenAPI spec "
+                                f"(missing `openapi`/`swagger` field)."
+                            )
+                            continue
+                    except json.JSONDecodeError:
+                        pass  # YAML spec — fine, scraper handles it
 
                     # ----------------------------------------------------------
                     # STEP 3: Commit spec JSON to Mintlify branch
@@ -573,7 +609,7 @@ def main():
                     # STEP 4: Run Mintlify scraper to generate MDX files,
                     # then commit each generated MDX to the branch.
                     # ----------------------------------------------------------
-                    local_spec_dir = Path(f"./mintlify_scratch/{display_version}")
+                    local_spec_dir  = Path(f"./mintlify_scratch/{display_version}")
                     local_spec_dir.mkdir(parents=True, exist_ok=True)
                     local_spec_path = local_spec_dir / f"{readme_slug}.json"
                     local_spec_path.write_bytes(spec_content)
