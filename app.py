@@ -439,7 +439,15 @@ def main():
                     skipped = []
                     failed = []
 
-                    for eng_key, readme_slug in current_mapping.items():
+                    # Deduplicate slugs (e.g. cde appears twice in slug_mapping)
+                    seen_slugs = set()
+                    unique_mapping = {}
+                    for k, v in current_mapping.items():
+                        if v not in seen_slugs:
+                            seen_slugs.add(v)
+                            unique_mapping[k] = v
+
+                    for eng_key, readme_slug in unique_mapping.items():
                         # ReadMe v2 API: GET /branches/{branch}/apis/{filename}
                         # Slugs in ReadMe are stored as {name}.json
                         fetch_url = (
@@ -574,10 +582,13 @@ def main():
                     )
                     docs_sha = existing_docs_resp.json()["sha"]
 
-                    # Find the API Reference tab and replace its dropdowns
+                    # Find the API Reference tab and replace with dropdowns
                     patched = False
                     for tab in docs_data.get("navigation", {}).get("tabs", []):
                         if tab.get("tab") == "API Reference":
+                            tab.pop("versions", None)
+                            tab.pop("groups", None)
+                            tab.pop("pages", None)
                             tab["dropdowns"] = all_dropdowns
                             patched = True
                             break
