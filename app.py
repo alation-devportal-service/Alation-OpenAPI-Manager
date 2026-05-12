@@ -177,7 +177,7 @@ def main():
 
     # --- WORKFLOW TABS ---
     st.divider()
-    tab_git, tab_manual = st.tabs(["🐙 Git Repo Pipeline", "📂 Manual File Upload"])
+    tab_git, tab_manual, tab_mintlify = st.tabs(["🐙 Git Repo Pipeline", "📂 Manual File Upload", "🌿 Pull to Mintlify"])
     npx = shutil.which("npx")
 
     # ==========================================
@@ -360,5 +360,247 @@ def main():
                                                 st.success(f"📝 Added `'{manual_path.stem}': '{manual_final_id}'` to `slug_mapping.json`.")
                                 else:
                                     st.error("❌ Upload failed. See logs above.")
+
+    # ==========================================
+    # TAB 3: PULL TO MINTLIFY
+    # ==========================================
+    with tab_mintlify:
+        st.subheader("🌿 Pull Specs from ReadMe → Mintlify Branch")
+        st.info(
+            "Downloads all specs for the selected ReadMe versions from the ReadMe v2 API "
+            "and commits them to `elena/testNavigationChanges` in `alation-dcx`, "
+            "then patches `docs.json` with the correct navigation structure."
+        )
+
+        MINTLIFY_REPO = st.secrets.get("MINTLIFY_REPO_NAME", "")
+        MINTLIFY_BRANCH = "elena/testNavigationChanges"
+        DOCS_JSON_PATH = "docs.json"
+
+        # Full version map: ReadMe slug → canonical display name
+        VERSION_MAP = {
+            "v2024.1.5":    "2024.1.5.0",
+            "v2024.1.31":   "2024.1.31.0",
+            "v2024.3":      "2024.3.0.0",
+            "v2024.3.1-ja": "2024.3.1-ja",
+            "v2024.3.1":    "2024.3.1.0",
+            "v2024.3.2":    "2024.3.2.0",
+            "v2024.3.4":    "2024.3.4.0",
+            "v2024.3.5":    "2024.3.5.0",
+            "v2025.1":      "2025.1.0.0",
+            "v2025.1.2":    "2025.1.2.0",
+            "v2025.1.3":    "2025.1.3.0",
+            "v2025.1.4":    "2025.1.4.0",
+            "v2025.1.5":    "2025.1.5.0",
+            "v2025.3":      "2025.3.0.0",
+            "v2025.3.1":    "2025.3.1.0",
+            "v2025.3.2":    "2025.3.2.0",
+            "v2025.3.3":    "2025.3.3.0",
+            "v2025.3.4":    "2025.3.4.0",
+            "v2026.1.0":    "2026.1.0.0",
+            "v2026.2.0":    "2026.2.0.0",
+            "v2026.2.1-0":  "2026.2.1.0",
+            "v2026.3.1-0":  "2026.3.1.0",
+            "v2026.5.0-0":  "2026.5.0.0",
+        }
+
+        gh_headers_personal = {
+            "Authorization": f"token {git_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+
+        selected_versions = st.multiselect(
+            "Select ReadMe versions to pull",
+            options=list(VERSION_MAP.keys()),
+            format_func=lambda v: f"{VERSION_MAP[v]}  ({v})",
+            default=["v2026.5.0-0"],
+            help="These map to ReadMe branch slugs. The display name in Mintlify uses the canonical version (e.g. 2026.5.0.0)."
+        )
+
+        st.caption(f"🎯 Target repo: `{MINTLIFY_REPO}` on branch `{MINTLIFY_BRANCH}`")
+
+        if st.button("⬇️ Pull Specs & Update docs.json", type="primary"):
+            if not selected_versions:
+                st.error("❌ Please select at least one version.")
+            elif not MINTLIFY_REPO:
+                st.error("❌ MINTLIFY_REPO_NAME secret is missing.")
+            elif not git_token:
+                st.error("❌ GIT_TOKEN secret is missing.")
+            elif not readme_key:
+                st.error("❌ README_API_KEY secret is missing.")
+            else:
+                all_dropdowns = []
+                any_failures = False
+
+                for readme_version in selected_versions:
+                    display_version = VERSION_MAP[readme_version]
+                    st.markdown(f"---\n#### 📦 `{display_version}` (ReadMe: `{readme_version}`)")
+                    groups = []
+                    skipped = []
+                    failed = []
+
+                    for eng_key, readme_slug in current_mapping.items():
+                        fetch_url = (
+                            f"https://api.readme.com/v2/openapi/{readme_slug}.json"
+                            f"?version={readme_version}"
+                        )
+                        resp = requests.get(
+                            fetch_url,
+                            headers={"Authorization": f"Bearer {readme_key}"}
+                        )
+
+                        if resp.status_code == 200:
+                            file_path_in_repo = (
+                                f"api-reference/{display_version}/{readme_slug}.json"
+                            )
+                            commit_url = (
+                                f"https://api.github.com/repos/{MINTLIFY_REPO}"
+                                f"/contents/{file_path_in_repo}"
+                            )
+
+                            # Check if file already exists on branch (need SHA to update)
+                            existing = requests.get(
+                                commit_url,
+                                headers=gh_headers_personal,
+                                params={"ref": MINTLIFY_BRANCH}
+                            )
+                            existing_sha = (
+                                existing.json().get("sha")
+                                if existing.status_code == 200
+                                else None
+                            )
+
+                            encoded = base64.b64encode(resp.content).decode("utf-8")
+                            commit_payload = {
+                                "message": (
+                                    f"🤖 Pull {readme_slug} for {display_version} from ReadMe"
+                                ),
+                                "content": encoded,
+                                "branch": MINTLIFY_BRANCH,
+                            }
+                            if existing_sha:
+                                commit_payload["sha"] = existing_sha
+
+                            put_resp = requests.put(
+                                commit_url,
+                                headers=gh_headers_personal,
+                                json=commit_payload
+                            )
+
+                            if put_resp.status_code in [200, 201]:
+                                group_name = readme_slug.replace("-", " ").title()
+                                groups.append({
+                                    "group": group_name,
+                                    "openapi": file_path_in_repo
+                                })
+                            else:
+                                failed.append(readme_slug)
+                                any_failures = True
+                                st.error(
+                                    f"❌ Failed to commit `{readme_slug}`: "
+                                    f"{put_resp.json().get('message', put_resp.text)}"
+                                )
+
+                        elif resp.status_code == 404:
+                            skipped.append(readme_slug)
+                        else:
+                            failed.append(readme_slug)
+                            any_failures = True
+                            st.error(
+                                f"❌ Error fetching `{readme_slug}` "
+                                f"({resp.status_code}): {resp.text[:200]}"
+                            )
+
+                    # Per-version summary
+                    st.success(f"✅ Committed {len(groups)} spec(s) for `{display_version}`")
+                    if skipped:
+                        st.info(
+                            f"ℹ️ Skipped {len(skipped)} spec(s) not present in `{readme_version}`: "
+                            + ", ".join(f"`{s}`" for s in skipped)
+                        )
+                    if failed:
+                        st.warning(
+                            f"⚠️ {len(failed)} spec(s) failed for `{readme_version}`: "
+                            + ", ".join(f"`{s}`" for s in failed)
+                        )
+
+                    all_dropdowns.append({
+                        "dropdown": display_version,
+                        "groups": groups
+                    })
+
+                # ---- Patch docs.json ----
+                st.markdown("---\n#### 📝 Patching `docs.json`")
+
+                docs_url = (
+                    f"https://api.github.com/repos/{MINTLIFY_REPO}"
+                    f"/contents/{DOCS_JSON_PATH}"
+                )
+                existing_docs_resp = requests.get(
+                    docs_url,
+                    headers=gh_headers_personal,
+                    params={"ref": MINTLIFY_BRANCH}
+                )
+
+                if existing_docs_resp.status_code != 200:
+                    st.error(
+                        f"❌ Could not fetch `docs.json` from `{MINTLIFY_BRANCH}`: "
+                        f"{existing_docs_resp.json().get('message', '')}"
+                    )
+                else:
+                    docs_data = json.loads(
+                        base64.b64decode(existing_docs_resp.json()["content"])
+                    )
+                    docs_sha = existing_docs_resp.json()["sha"]
+
+                    # Find the API Reference tab and replace its dropdowns
+                    patched = False
+                    for tab in docs_data.get("navigation", {}).get("tabs", []):
+                        if tab.get("tab") == "API Reference":
+                            tab["dropdowns"] = all_dropdowns
+                            patched = True
+                            break
+
+                    if not patched:
+                        st.error(
+                            "❌ Could not find an `API Reference` tab in `docs.json`. "
+                            "Check that the tab name matches exactly."
+                        )
+                    else:
+                        updated_content = base64.b64encode(
+                            json.dumps(docs_data, indent=2).encode("utf-8")
+                        ).decode("utf-8")
+
+                        put_docs_resp = requests.put(
+                            docs_url,
+                            headers=gh_headers_personal,
+                            json={
+                                "message": (
+                                    "🤖 Update docs.json API Reference for: "
+                                    + ", ".join(VERSION_MAP[v] for v in selected_versions)
+                                ),
+                                "content": updated_content,
+                                "sha": docs_sha,
+                                "branch": MINTLIFY_BRANCH,
+                            }
+                        )
+
+                        if put_docs_resp.status_code in [200, 201]:
+                            if any_failures:
+                                st.warning(
+                                    "⚠️ `docs.json` updated, but some specs failed to commit. "
+                                    "Review errors above before merging."
+                                )
+                            else:
+                                st.success(
+                                    "🎉 All done! `docs.json` updated on "
+                                    f"`{MINTLIFY_BRANCH}`. "
+                                    "Mintlify will auto-deploy the branch preview shortly."
+                                )
+                        else:
+                            st.error(
+                                f"❌ Failed to update `docs.json`: "
+                                f"{put_docs_resp.json().get('message', put_docs_resp.text)}"
+                            )
+
 if __name__ == "__main__":
     main()
