@@ -741,16 +741,35 @@ def main():
                     st.warning(f"⚠️ Failed: {', '.join(f'`{s}`' for s in failed_specs)}")
 
                 # ==============================================================
-                # STEP 4: For each category, fetch its pages from ReadMe,
-                # call the individual page endpoint to get method + path +
-                # owning spec, generate MDX, commit, build docs.json groups.
+                # STEP 4: Build a local index of all spec paths, then for each
+                # category fetch its pages from ReadMe, look up method + path
+                # from the local spec index, generate MDX, and commit.
+                # This avoids one ReadMe API call per page (hundreds of calls).
                 # ==============================================================
+
+                # Build index: {readme_slug: {"/path/": {"post": True, ...}}}
+                # by reading the committed spec JSON files via GitHub API
+                spec_path_index = {}
+                for readme_slug, rel_path in committed_specs.items():
+                    spec_url = (
+                        f"https://api.github.com/repos/{mintlify_repo}"
+                        f"/contents/{API_REF_BASE}/{display_version}/{readme_slug}.json"
+                    )
+                    spec_resp = gh_get(spec_url, git_token, params={"ref": MINTLIFY_BRANCH})
+                    if spec_resp.status_code == 200:
+                        try:
+                            spec_data = json.loads(
+                                base64.b64decode(spec_resp.json()["content"])
+                            )
+                            spec_path_index[readme_slug] = spec_data.get("paths", {})
+                        except Exception:
+                            spec_path_index[readme_slug] = {}
+
                 version_groups = []
 
                 for category in categories:
                     cat_title = category.get("title", "")
 
-                    # Get ordered pages within this category
                     pages, err = get_category_pages(readme_version, cat_title, readme_key)
                     if err:
                         st.warning(f"⚠️ Could not fetch pages for `{cat_title}`: {err}")
@@ -760,58 +779,42 @@ def main():
                         continue
 
                     nav_pages     = []
-                    cat_spec_path = None  # spec path for this category (from first endpoint page)
+                    cat_spec_path = None
 
                     for page in pages:
                         page_title = page.get("title", "")
                         page_slug  = page.get("slug", "")
 
-                        # Fetch full page detail to get api.method, api.path,
-                        # and the owning spec URI
-                        detail = get_reference_page(readme_version, page_slug, readme_key)
-
-                        api_method   = ""
-                        api_path     = ""
+                        # Look up this page's endpoint in the local spec index
+                        api_method    = ""
+                        api_path      = ""
                         spec_rel_path = None
 
-                        if detail:
-                            api_info   = detail.get("api") or {}
-                            api_method = api_info.get("method", "")
-                            api_path   = api_info.get("path", "")
-
-                            if api_method and api_path:
-                                # The individual page response embeds the full spec schema.
-                                # Extract the spec title from api.schema.info.title and
-                                # match it against committed specs by slug.
-                                # e.g. "Token Authentication and Management APIs." →
-                                #      "token-authentication-and-management-apis"
-                                schema_title = (
-                                    (api_info.get("schema") or {})
-                                    .get("info", {})
-                                    .get("title", "")
-                                )
-                                derived_slug = re.sub(
-                                    r"[^a-z0-9]+", "-",
-                                    schema_title.lower()
-                                ).strip("-")
-
-                                # Try exact match first, then prefix match
-                                if derived_slug in committed_specs:
-                                    spec_rel_path = committed_specs[derived_slug]
-                                else:
-                                    # Prefix match — e.g. derived may have trailing dot
-                                    for slug, rel_path in committed_specs.items():
-                                        if slug.startswith(derived_slug[:20]) or derived_slug.startswith(slug[:20]):
-                                            spec_rel_path = rel_path
-                                            break
+                        for readme_slug, paths in spec_path_index.items():
+                            for path, methods in paths.items():
+                                for method in methods.keys():
+                                    # Match by operationId or summary against page slug/title
+                                    op = methods[method]
+                                    if not isinstance(op, dict):
+                                        continue
+                                    op_id = op.get("operationId", "").lower()
+                                    # Slugify operationId to compare with page slug
+                                    op_slug = re.sub(r"[^a-z0-9]+", "-", op_id).strip("-")
+                                    if op_slug == page_slug or op_id == page_slug:
+                                        api_method    = method
+                                        api_path      = path
+                                        spec_rel_path = committed_specs[readme_slug]
+                                        break
+                                if api_path:
+                                    break
+                            if api_path:
+                                break
 
                         mdx_filename  = slug_to_mdx_filename(page_slug)
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
                         mdx_nav_path  = f"api-reference/{display_version}/{page_slug}"
 
-                        # Build MDX with openapi frontmatter if we have method+path+spec
                         if api_method and api_path and spec_rel_path:
-                            # Capture the category's spec from the first endpoint page
                             if cat_spec_path is None:
                                 cat_spec_path = spec_rel_path
                             mdx_content = build_endpoint_mdx(
