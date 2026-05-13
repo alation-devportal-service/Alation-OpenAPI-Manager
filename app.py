@@ -664,9 +664,33 @@ def main():
                 st.write(f"📂 Found **{len(categories)}** reference categories")
 
                 # ==============================================================
+                # STEP 2.5: Clean up stale .json spec files left from previous
+                # runs before we switched to .yaml. List all files in the
+                # version directory and delete any .json spec files.
+                # ==============================================================
+                with st.spinner("🧹 Cleaning up stale spec files from previous runs..."):
+                    list_url  = f"https://api.github.com/repos/{mintlify_repo}/contents/{API_REF_BASE}/{display_version}"
+                    list_resp = gh_get(list_url, git_token, params={"ref": MINTLIFY_BRANCH})
+                    if list_resp.status_code == 200:
+                        stale_deleted = 0
+                        for item in list_resp.json():
+                            name = item.get("name", "")
+                            # Delete old .json spec files (not docs.json)
+                            if name.endswith(".json") and item.get("type") == "file":
+                                del_resp = requests.delete(
+                                    f"https://api.github.com/repos/{mintlify_repo}/contents/{API_REF_BASE}/{display_version}/{name}",
+                                    headers={"Authorization": f"token {git_token}", "Accept": "application/vnd.github.v3+json"},
+                                    json={"message": f"🧹 Remove stale spec file: {name}", "sha": item["sha"], "branch": MINTLIFY_BRANCH}
+                                )
+                                if del_resp.status_code in [200, 201]:
+                                    stale_deleted += 1
+                        if stale_deleted:
+                            st.info(f"🧹 Removed {stale_deleted} stale `.json` spec file(s)")
+
+                # ==============================================================
                 # STEP 3: For each spec ReadMe has for this version, find the
                 # YAML in the eng repo using slug_mapping.json, prep it, and
-                # commit as JSON to the Mintlify branch.
+                # commit as YAML to the Mintlify branch.
                 #
                 # Flow:
                 #   ReadMe filename  →  readme_slug  (strip extension)
