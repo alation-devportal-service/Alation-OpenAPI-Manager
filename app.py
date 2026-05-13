@@ -74,6 +74,72 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
         return False, resp
     return False, resp
 
+def batch_commit_files(repo, token, branch, files, message):
+    """
+    Commits multiple files in a single Git commit using the Trees API.
+    One commit = one Mintlify build trigger instead of one per file.
+
+    files: list of {"path": "repo/relative/path", "content": bytes}
+    Returns (success: bool, error_message: str|None)
+    """
+    base_url = f"https://api.github.com/repos/{repo}"
+    headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+    # Get current branch HEAD SHA
+    ref_resp = requests.get(f"{base_url}/git/ref/heads/{branch}", headers=headers)
+    if ref_resp.status_code != 200:
+        return False, f"Could not get branch ref: {ref_resp.text}"
+    base_commit_sha = ref_resp.json()["object"]["sha"]
+
+    # Get base tree SHA from HEAD commit
+    commit_resp = requests.get(f"{base_url}/git/commits/{base_commit_sha}", headers=headers)
+    if commit_resp.status_code != 200:
+        return False, f"Could not get base commit: {commit_resp.text}"
+    base_tree_sha = commit_resp.json()["tree"]["sha"]
+
+    # Create a blob for each file
+    tree_items = []
+    for file in files:
+        blob_resp = requests.post(
+            f"{base_url}/git/blobs",
+            headers=headers,
+            json={"content": base64.b64encode(file["content"]).decode("utf-8"), "encoding": "base64"},
+        )
+        if blob_resp.status_code not in [200, 201]:
+            return False, f"Could not create blob for {file['path']}: {blob_resp.text}"
+        tree_items.append({"path": file["path"], "mode": "100644", "type": "blob", "sha": blob_resp.json()["sha"]})
+
+    # Create new tree
+    tree_resp = requests.post(
+        f"{base_url}/git/trees",
+        headers=headers,
+        json={"base_tree": base_tree_sha, "tree": tree_items},
+    )
+    if tree_resp.status_code not in [200, 201]:
+        return False, f"Could not create tree: {tree_resp.text}"
+    new_tree_sha = tree_resp.json()["sha"]
+
+    # Create new commit
+    new_commit_resp = requests.post(
+        f"{base_url}/git/commits",
+        headers=headers,
+        json={"message": message, "tree": new_tree_sha, "parents": [base_commit_sha]},
+    )
+    if new_commit_resp.status_code not in [200, 201]:
+        return False, f"Could not create commit: {new_commit_resp.text}"
+    new_commit_sha = new_commit_resp.json()["sha"]
+
+    # Update branch HEAD
+    update_resp = requests.patch(
+        f"{base_url}/git/refs/heads/{branch}",
+        headers=headers,
+        json={"sha": new_commit_sha, "force": False},
+    )
+    if update_resp.status_code not in [200, 201]:
+        return False, f"Could not update branch ref: {update_resp.text}"
+
+    return True, None
+
 # ---------------------------------------------------------------------------
 # README API v2 HELPERS
 # ---------------------------------------------------------------------------
@@ -586,6 +652,7 @@ def main():
 
             all_version_dropdowns = []
             any_failures          = False
+            all_files             = []  # all files staged for batch commit
 
             for readme_version in selected_versions:
                 display_version = VERSION_MAP[readme_version]
@@ -623,7 +690,6 @@ def main():
                 committed_specs = {}  # readme_slug → "api-reference/{ver}/{slug}.yaml"
                 spec_path_index = {}  # readme_slug → {"/path/": {"method": op, ...}}
                 skipped_specs   = []
-                failed_specs    = []
 
                 for filename in sorted(branch_slugs):
                     readme_slug  = re.sub(r"\.(json|yaml|yml)$", "", filename)
@@ -668,42 +734,24 @@ def main():
                         st.warning(f"⚠️ `{readme_slug}`: not found in eng repo or ReadMe — skipping.")
                         continue
 
-                    # Commit spec YAML to branch
+                    # Stage spec for batch commit
                     spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.yaml"
-                    ok, put_resp   = commit_file_to_branch(
-                        repo          = mintlify_repo,
-                        token         = git_token,
-                        branch        = MINTLIFY_BRANCH,
-                        file_path     = spec_repo_path,
-                        content_bytes = spec_content,
-                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_source}",
-                    )
-                    if ok:
-                        committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
-                        # Build path index in memory from spec content
-                        try:
-                            spec_path_index[readme_slug] = yaml.safe_load(spec_content).get("paths", {})
-                        except Exception:
-                            spec_path_index[readme_slug] = {}
-                    else:
-                        failed_specs.append(readme_slug)
-                        any_failures = True
-                        st.error(f"❌ Failed to commit `{readme_slug}`: {put_resp.json().get('message', put_resp.text)}")
+                    all_files.append({"path": spec_repo_path, "content": spec_content})
+                    committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
+                    # Build path index in memory
+                    try:
+                        spec_path_index[readme_slug] = yaml.safe_load(spec_content).get("paths", {})
+                    except Exception:
+                        spec_path_index[readme_slug] = {}
 
-                st.success(f"✅ Committed **{len(committed_specs)}** spec(s)")
+                st.write(f"📦 Prepared **{len(committed_specs)}** spec(s) for commit")
                 if skipped_specs:
                     st.info(f"ℹ️ Skipped: {', '.join(f'`{s}`' for s in skipped_specs)}")
-                if failed_specs:
-                    st.warning(f"⚠️ Failed: {', '.join(f'`{s}`' for s in failed_specs)}")
 
                 # ==============================================================
                 # STEP 4: For each category, fetch pages from ReadMe.
-                # - Endpoint pages: identified via operationId match in spec index.
-                #   Skipped — Mintlify auto-generates these from the spec YAML.
-                # - Non-endpoint pages (overview, content): fetch Markdown body
-                #   from ReadMe and commit as content MDX.
-                # The group-level openapi field in docs.json drives endpoint
-                # auto-generation by Mintlify.
+                # - Endpoint pages: skip — Mintlify auto-generates from spec.
+                # - Non-endpoint pages: fetch body from ReadMe, stage as MDX.
                 # ==============================================================
                 version_groups = []
 
@@ -724,7 +772,7 @@ def main():
                         page_title = page.get("title", "")
                         page_slug  = page.get("slug",  "")
 
-                        # Determine if this is an endpoint page
+                        # Determine if endpoint page via operationId match
                         is_endpoint     = False
                         normalized_slug = re.sub(r"-\d+$", "", page_slug.lower())
 
@@ -744,10 +792,9 @@ def main():
                                 break
 
                         if is_endpoint:
-                            # Endpoint — Mintlify auto-generates from spec, skip MDX
-                            continue
+                            continue  # Mintlify auto-generates endpoint pages from spec
 
-                        # Non-endpoint — fetch body from ReadMe and commit MDX
+                        # Non-endpoint — fetch body from ReadMe, stage MDX
                         detail = get_reference_page(readme_version, page_slug, readme_key)
                         body   = ""
                         if detail:
@@ -757,18 +804,9 @@ def main():
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
                         mdx_nav_path  = f"api-reference/{display_version}/{mdx_filename[:-4]}"
 
-                        ok, _ = commit_file_to_branch(
-                            repo          = mintlify_repo,
-                            token         = git_token,
-                            branch        = MINTLIFY_BRANCH,
-                            file_path     = mdx_repo_path,
-                            content_bytes = mdx_content,
-                            message       = f"🤖 Content MDX: {page_slug} ({display_version})",
-                        )
-                        if ok:
-                            nav_pages.append(mdx_nav_path)
+                        all_files.append({"path": mdx_repo_path, "content": mdx_content})
+                        nav_pages.append(mdx_nav_path)
 
-                    # Group entry — openapi drives endpoint auto-generation
                     group_entry = {"group": cat_title}
                     if cat_spec_path:
                         group_entry["openapi"] = cat_spec_path
@@ -776,6 +814,7 @@ def main():
                         group_entry["pages"] = nav_pages
                     version_groups.append(group_entry)
 
+                st.write(f"📝 Prepared **{len([f for f in all_files if f['path'].endswith('.mdx')])}** content MDX file(s)")
                 st.success(f"✅ Processed **{len(version_groups)}** categories")
 
                 all_version_dropdowns.append({
@@ -784,10 +823,28 @@ def main():
                 })
 
             # ==============================================================
-            # STEP 5: Patch docs.json
+            # STEP 5: Batch commit all spec YAML + content MDX files,
+            # then patch docs.json in a second commit.
+            # Two commits total = two Mintlify builds (not hundreds).
             # ==============================================================
-            st.markdown("---\n#### 📝 Patching `docs.json`")
+            st.markdown("---\n#### 📝 Committing all files and patching `docs.json`")
 
+            if all_files:
+                with st.spinner(f"⬆️ Batch committing {len(all_files)} file(s) in one commit..."):
+                    ok, err = batch_commit_files(
+                        repo    = mintlify_repo,
+                        token   = git_token,
+                        branch  = MINTLIFY_BRANCH,
+                        files   = all_files,
+                        message = "🤖 Migrate API reference: " + ", ".join(VERSION_MAP[v] for v in selected_versions),
+                    )
+                if ok:
+                    st.success(f"✅ Committed {len(all_files)} file(s) in one batch commit")
+                else:
+                    st.error(f"❌ Batch commit failed: {err}")
+                    any_failures = True
+
+            # Patch docs.json in a separate commit
             docs_url  = f"https://api.github.com/repos/{mintlify_repo}/contents/{DOCS_JSON_PATH}"
             docs_resp = gh_get(docs_url, git_token, params={"ref": MINTLIFY_BRANCH})
 
@@ -797,6 +854,7 @@ def main():
                 docs_data = json.loads(base64.b64decode(docs_resp.json()["content"]))
                 patched   = False
 
+                # Try tabs structure (elena/testNavigationChanges schema)
                 for tab in docs_data.get("navigation", {}).get("tabs", []):
                     if tab.get("tab") == "API Reference":
                         for key in ["groups", "pages", "versions", "dropdowns"]:
@@ -805,8 +863,16 @@ def main():
                         patched = True
                         break
 
+                # Fall back to products structure (main branch schema)
                 if not patched:
-                    st.error("❌ Could not find `API Reference` tab in `docs.json`.")
+                    for product in docs_data.get("navigation", {}).get("products", []):
+                        if product.get("product") == "API Reference":
+                            product["groups"] = all_version_dropdowns
+                            patched = True
+                            break
+
+                if not patched:
+                    st.error("❌ Could not find `API Reference` in `docs.json`.")
                 else:
                     ok, put_resp = commit_file_to_branch(
                         repo          = mintlify_repo,
@@ -818,11 +884,11 @@ def main():
                     )
                     if ok:
                         if any_failures:
-                            st.warning("⚠️ `docs.json` updated but some specs had errors. Review above before merging.")
+                            st.warning("⚠️ Migration complete with some errors. Review above before merging.")
                         else:
                             st.success(
-                                f"🎉 Migration complete! `docs.json` committed to `{MINTLIFY_BRANCH}`. "
-                                "Mintlify will auto-deploy the branch preview shortly."
+                                f"🎉 Migration complete! All files committed to `{MINTLIFY_BRANCH}` "
+                                "in 2 commits. Mintlify will auto-deploy the branch preview shortly."
                             )
                     else:
                         st.error(f"❌ Failed to update `docs.json`: {put_resp.json().get('message', put_resp.text)}")
