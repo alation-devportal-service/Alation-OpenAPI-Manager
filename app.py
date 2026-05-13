@@ -57,8 +57,8 @@ def save_slug_mapping(repo_name, token, updated_mapping, sha):
     resp = gh_put(url, token, payload)
     return resp.status_code in [200, 201]
 
-def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message, retries=2):
-    """Creates or updates a file on a GitHub branch. Retries on SHA conflict."""
+def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message, retries=3):
+    """Creates or updates a file on a GitHub branch. Retries on SHA conflict (409 or 422)."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     for attempt in range(retries + 1):
         existing = gh_get(url, token, params={"ref": branch})
@@ -73,7 +73,8 @@ def commit_file_to_branch(repo, token, branch, file_path, content_bytes, message
         resp = gh_put(url, token, payload)
         if resp.status_code in [200, 201]:
             return True, resp
-        if resp.status_code == 409 and attempt < retries:
+        # Retry on SHA conflict (409) or SHA mismatch (422)
+        if resp.status_code in [409, 422] and attempt < retries:
             continue
         return False, resp
     return False, resp
