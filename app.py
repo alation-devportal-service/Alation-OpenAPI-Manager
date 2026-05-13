@@ -698,6 +698,7 @@ def main():
                 #   eng repo         →  {eng_key}.yaml
                 # ==============================================================
                 committed_specs = {}   # readme_slug → "api-reference/{ver}/{slug}.yaml"
+                spec_path_index = {}   # readme_slug → {"/path/": {"method": op_data, ...}}
                 skipped_specs   = []
                 failed_specs    = []
 
@@ -778,6 +779,11 @@ def main():
                     )
                     if ok:
                         committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
+                        # Build path index in memory from spec content
+                        try:
+                            spec_path_index[readme_slug] = yaml.safe_load(spec_content).get("paths", {})
+                        except Exception:
+                            spec_path_index[readme_slug] = {}
                     else:
                         failed_specs.append(readme_slug)
                         any_failures = True
@@ -788,38 +794,6 @@ def main():
                     st.info(f"ℹ️ Skipped: {', '.join(f'`{s}`' for s in skipped_specs)}")
                 if failed_specs:
                     st.warning(f"⚠️ Failed: {', '.join(f'`{s}`' for s in failed_specs)}")
-
-                # ==============================================================
-                # STEP 4: Build a local spec path index from committed spec JSON
-                # files. Maps: readme_slug → {"/path/": {"method": op_data}}
-                # Used to match ReadMe page slugs to endpoint operationIds
-                # without per-page ReadMe API calls.
-                # ==============================================================
-                # STEP 4: Build spec path index in memory from the spec content
-                # we already loaded in Step 3. No extra GitHub API calls needed.
-                # Maps: readme_slug → {"/path/": {"method": op_data, ...}}
-                # ==============================================================
-                spec_path_index  = {}
-
-                # Re-load each committed spec from the eng repo to build index
-                for filename in sorted(branch_slugs):
-                    readme_slug = re.sub(r"\.(json|yaml|yml)$", "", filename)
-                    if readme_slug not in committed_specs:
-                        continue
-                    eng_keys = reverse_mapping.get(readme_slug, [])
-                    for eng_key in eng_keys:
-                        for spec_dir in [path_main, path_logical]:
-                            candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
-                            if candidate.exists():
-                                try:
-                                    raw = prep_spec_content(candidate, display_version, readme_slug)
-                                    spec_yaml = yaml.safe_load(raw)
-                                    spec_path_index[readme_slug] = spec_yaml.get("paths", {})
-                                except Exception:
-                                    spec_path_index[readme_slug] = {}
-                                break
-                        if readme_slug in spec_path_index:
-                            break
 
                 # ==============================================================
                 # STEP 5: For each category, fetch its pages from ReadMe.
@@ -861,7 +835,11 @@ def main():
                                     if not isinstance(op, dict):
                                         continue
                                     op_id = op.get("operationId", "")
-                                    if op_id.lower() == page_slug.lower():
+                                    # ReadMe deduplicates slugs by appending -1, -2 etc
+                                    # when the same operationId exists in multiple specs.
+                                    # Strip trailing -N suffix before comparing.
+                                    normalized_slug = re.sub(r"-\d+$", "", page_slug.lower())
+                                    if op_id.lower() == page_slug.lower() or op_id.lower() == normalized_slug:
                                         api_method    = method
                                         api_path      = path
                                         spec_rel_path = committed_specs[readme_slug]
