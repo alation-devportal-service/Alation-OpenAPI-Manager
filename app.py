@@ -82,11 +82,13 @@ def batch_commit_files(repo, token, branch, files, message):
     files: list of {"path": "repo/relative/path", "content": bytes}
     Returns (success: bool, error_message: str|None)
     """
-    base_url = f"https://api.github.com/repos/{repo}"
-    headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    import urllib.parse
+    base_url      = f"https://api.github.com/repos/{repo}"
+    headers       = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    encoded_branch = urllib.parse.quote(branch, safe="")
 
     # Get current branch HEAD SHA
-    ref_resp = requests.get(f"{base_url}/git/ref/heads/{branch}", headers=headers)
+    ref_resp = requests.get(f"{base_url}/git/ref/heads/{encoded_branch}", headers=headers)
     if ref_resp.status_code != 200:
         return False, f"Could not get branch ref: {ref_resp.text}"
     base_commit_sha = ref_resp.json()["object"]["sha"]
@@ -129,9 +131,9 @@ def batch_commit_files(repo, token, branch, files, message):
         return False, f"Could not create commit: {new_commit_resp.text}"
     new_commit_sha = new_commit_resp.json()["sha"]
 
-    # Update branch HEAD
+    # Update branch HEAD — use refs endpoint with encoded branch
     update_resp = requests.patch(
-        f"{base_url}/git/refs/heads/{branch}",
+        f"{base_url}/git/refs/heads/{encoded_branch}",
         headers=headers,
         json={"sha": new_commit_sha, "force": False},
     )
@@ -737,7 +739,7 @@ def main():
                     # Stage spec for batch commit
                     spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.yaml"
                     all_files.append({"path": spec_repo_path, "content": spec_content})
-                    committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
+                    committed_specs[readme_slug] = f"/api-reference/{display_version}/{readme_slug}.yaml"
                     # Build path index in memory
                     try:
                         spec_path_index[readme_slug] = yaml.safe_load(spec_content).get("paths", {})
@@ -802,7 +804,7 @@ def main():
                         mdx_content   = build_content_mdx(page_title, body)
                         mdx_filename  = slug_to_mdx_filename(page_slug)
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
-                        mdx_nav_path  = f"api-reference/{display_version}/{mdx_filename[:-4]}"
+                        mdx_nav_path  = f"/api-reference/{display_version}/{mdx_filename[:-4]}"
 
                         all_files.append({"path": mdx_repo_path, "content": mdx_content})
                         nav_pages.append(mdx_nav_path)
