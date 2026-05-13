@@ -9,23 +9,12 @@ import urllib.parse
 import tarfile
 import re
 import base64
-from datetime import date, datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Alation OpenAPI Manager", page_icon="📘", layout="wide")
-
-# ---------------------------------------------------------------------------
-# JSON ENCODER — handles datetime objects that yaml.safe_load() produces
-# ---------------------------------------------------------------------------
-
-class SafeEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, (datetime, date)):
-            return obj.isoformat()
-        return super().default(obj)
 
 # ---------------------------------------------------------------------------
 # GITHUB HELPERS
@@ -232,7 +221,7 @@ def prep_openapi_file(filepath, version, target_slug):
 def prep_spec_content(filepath, version, readme_slug):
     """
     Loads a YAML spec, applies prep transformations in memory,
-    and returns JSON bytes. No temp files written.
+    and returns YAML bytes. No temp files written.
     Used by the Mintlify migration (Tab 3).
     """
     with open(filepath, "r") as f:
@@ -253,7 +242,7 @@ def prep_spec_content(filepath, version, readme_slug):
         if "base-url" in variables:
             variables["base-url"]["default"] = "alation_domain"
 
-    return json.dumps(data, indent=2, cls=SafeEncoder).encode("utf-8")
+    return yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
 
 # ---------------------------------------------------------------------------
 # MDX BUILDERS
@@ -683,7 +672,7 @@ def main():
                 #   slug_mapping rev →  eng_key      (e.g. "agent")
                 #   eng repo         →  {eng_key}.yaml
                 # ==============================================================
-                committed_specs = {}   # readme_slug → "api-reference/{ver}/{slug}.json"
+                committed_specs = {}   # readme_slug → "api-reference/{ver}/{slug}.yaml"
                 skipped_specs   = []
                 failed_specs    = []
 
@@ -720,7 +709,7 @@ def main():
                         )
                         continue
 
-                    spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.json"
+                    spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.yaml"
                     ok, put_resp   = commit_file_to_branch(
                         repo          = mintlify_repo,
                         token         = git_token,
@@ -730,7 +719,7 @@ def main():
                         message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_eng_key}.yaml",
                     )
                     if ok:
-                        committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.json"
+                        committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
                     else:
                         failed_specs.append(readme_slug)
                         any_failures = True
@@ -766,8 +755,8 @@ def main():
                             if candidate.exists():
                                 try:
                                     raw = prep_spec_content(candidate, display_version, readme_slug)
-                                    spec_json = json.loads(raw)
-                                    spec_path_index[readme_slug] = spec_json.get("paths", {})
+                                    spec_yaml = yaml.safe_load(raw)
+                                    spec_path_index[readme_slug] = spec_yaml.get("paths", {})
                                 except Exception:
                                     spec_path_index[readme_slug] = {}
                                 break
