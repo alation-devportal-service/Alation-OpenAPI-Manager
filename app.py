@@ -705,33 +705,66 @@ def main():
                     readme_slug = re.sub(r"\.(json|yaml|yml)$", "", filename)
                     eng_keys    = reverse_mapping.get(readme_slug)
 
-                    if not eng_keys:
-                        skipped_specs.append(readme_slug)
-                        st.warning(f"⚠️ `{readme_slug}`: not in slug_mapping.json — skipping.")
-                        continue
-
                     spec_content = None
-                    used_eng_key = None
-                    for eng_key in eng_keys:
-                        for spec_dir in [path_main, path_logical]:
-                            candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
-                            if candidate.exists():
-                                try:
-                                    spec_content = prep_spec_content(candidate, display_version, readme_slug)
-                                    used_eng_key = eng_key
-                                except Exception as e:
-                                    st.error(f"❌ `{readme_slug}`: failed to prep `{eng_key}.yaml` — {e}")
+                    used_source  = None
+
+                    # --- Source 1: Engineering repo YAML ---
+                    if eng_keys:
+                        for eng_key in eng_keys:
+                            for spec_dir in [path_main, path_logical]:
+                                candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
+                                if candidate.exists():
+                                    try:
+                                        spec_content = prep_spec_content(candidate, display_version, readme_slug)
+                                        used_source  = f"{eng_key}.yaml"
+                                    except Exception as e:
+                                        st.error(f"❌ `{readme_slug}`: failed to prep `{eng_key}.yaml` — {e}")
+                                        spec_content = None
+                                    break
+                            if spec_content is not None:
                                 break
-                        if spec_content is not None:
-                            break
+
+                        if spec_content is None:
+                            tried = ", ".join(f"`{k}.yaml`" for k in eng_keys)
+                            st.warning(f"⚠️ `{readme_slug}`: YAML not found in eng repo (tried {tried}) — trying ReadMe...")
+
+                    # --- Source 2: ReadMe API fallback ---
+                    if spec_content is None:
+                        try:
+                            resp = requests.get(
+                                f"https://api.readme.com/v2/branches/{readme_version.lstrip('v')}/apis/{readme_slug}.json",
+                                headers={"Authorization": f"Bearer {readme_key}"},
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                if isinstance(data, dict):
+                                    data.setdefault("info", {})["version"] = display_version
+                                    data.setdefault("x-readme", {}).update({
+                                        "explorer-enabled": False,
+                                        "proxy-enabled":    True,
+                                    })
+                                    for server in data.get("servers", []):
+                                        variables = server.get("variables", {})
+                                        if "protocol" in variables:
+                                            variables["protocol"]["default"] = "https"
+                                        if "base-url" in variables:
+                                            variables["base-url"]["default"] = "alation_domain"
+                                    spec_content = yaml.dump(
+                                        data,
+                                        default_flow_style=False,
+                                        sort_keys=False,
+                                        allow_unicode=True,
+                                    ).encode("utf-8")
+                                    used_source = "ReadMe (manually uploaded)"
+                        except Exception as e:
+                            st.warning(f"⚠️ `{readme_slug}`: ReadMe fallback failed — {e}")
 
                     if spec_content is None:
                         skipped_specs.append(readme_slug)
-                        tried = ", ".join(f"`{k}.yaml`" for k in eng_keys)
-                        st.error(
-                            f"❌ `{readme_slug}`: YAML not found in pulled eng repo "
-                            f"(tried {tried}). Re-pull specs and try again."
-                        )
+                        if not eng_keys:
+                            st.warning(f"⚠️ `{readme_slug}`: not in slug_mapping.json and not found in ReadMe — skipping.")
+                        else:
+                            st.error(f"❌ `{readme_slug}`: not found in eng repo or ReadMe — skipping.")
                         continue
 
                     spec_repo_path = f"{API_REF_BASE}/{display_version}/{readme_slug}.yaml"
@@ -741,7 +774,7 @@ def main():
                         branch        = MINTLIFY_BRANCH,
                         file_path     = spec_repo_path,
                         content_bytes = spec_content,
-                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_eng_key}.yaml",
+                        message       = f"🤖 Spec: {readme_slug} ({display_version}) from {used_source}",
                     )
                     if ok:
                         committed_specs[readme_slug] = f"api-reference/{display_version}/{readme_slug}.yaml"
