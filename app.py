@@ -82,16 +82,21 @@ def batch_commit_files(repo, token, branch, files, message):
     files: list of {"path": "repo/relative/path", "content": bytes}
     Returns (success: bool, error_message: str|None)
     """
-    import urllib.parse
-    base_url      = f"https://api.github.com/repos/{repo}"
-    headers       = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-    encoded_branch = urllib.parse.quote(branch, safe="")
+    base_url = f"https://api.github.com/repos/{repo}"
+    headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
-    # Get current branch HEAD SHA
-    ref_resp = requests.get(f"{base_url}/git/ref/heads/{encoded_branch}", headers=headers)
-    if ref_resp.status_code != 200:
-        return False, f"Could not get branch ref: {ref_resp.text}"
-    base_commit_sha = ref_resp.json()["object"]["sha"]
+    # Get current branch HEAD SHA — use the git/refs endpoint which handles
+    # branch names with slashes correctly by listing and filtering
+    refs_resp = requests.get(f"{base_url}/git/refs/heads", headers=headers)
+    if refs_resp.status_code != 200:
+        return False, f"Could not list refs: {refs_resp.text}"
+    base_commit_sha = None
+    for ref in refs_resp.json():
+        if ref.get("ref") == f"refs/heads/{branch}":
+            base_commit_sha = ref["object"]["sha"]
+            break
+    if not base_commit_sha:
+        return False, f"Could not find branch ref for '{branch}'"
 
     # Get base tree SHA from HEAD commit
     commit_resp = requests.get(f"{base_url}/git/commits/{base_commit_sha}", headers=headers)
@@ -131,7 +136,9 @@ def batch_commit_files(repo, token, branch, files, message):
         return False, f"Could not create commit: {new_commit_resp.text}"
     new_commit_sha = new_commit_resp.json()["sha"]
 
-    # Update branch HEAD — use refs endpoint with encoded branch
+    # Update branch HEAD — PATCH the specific ref
+    # GitHub handles slashes in branch names correctly here
+    encoded_branch = urllib.parse.quote(branch, safe="")
     update_resp = requests.patch(
         f"{base_url}/git/refs/heads/{encoded_branch}",
         headers=headers,
