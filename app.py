@@ -305,6 +305,16 @@ def prep_spec_from_dict(data, version):
 def slug_to_mdx_filename(slug):
     return re.sub(r"[^a-z0-9-]", "-", slug.lower()).strip("-") + ".mdx"
 
+def build_endpoint_mdx(page_title, spec_rel_path, method, api_path):
+    """MDX for an API endpoint page with absolute openapi frontmatter path."""
+    safe_title = page_title.replace('"', '\\"')
+    return (
+        f'---\n'
+        f'title: "{safe_title}"\n'
+        f'openapi: "{spec_rel_path} {method.upper()} {api_path}"\n'
+        f'---\n'
+    ).encode("utf-8")
+
 def build_content_mdx(page_title, body=""):
     """MDX for non-endpoint pages (overview, authentication, custom content)."""
     safe_title = page_title.replace('"', '\\"')
@@ -589,8 +599,9 @@ def main():
             "1. Pull spec list and category structure from ReadMe v2 API\n"
             "2. Source spec content from the engineering repo YAML (with ReadMe fallback)\n"
             "3. Commit spec YAML files to the Mintlify branch\n"
-            "4. Fetch overview/content pages from ReadMe and commit as MDX\n"
-            "5. Patch `docs.json` — Mintlify auto-generates endpoint pages from each spec"
+            "4. Generate MDX pages — endpoint pages with absolute openapi frontmatter,\n"
+            "   overview/content pages with Markdown body from ReadMe\n"
+            "5. Patch `docs.json` with group-level openapi fields and absolute page paths"
         )
         st.caption(f"🎯 Target: `{mintlify_repo}` → `{MINTLIFY_BRANCH}`")
 
@@ -759,8 +770,11 @@ def main():
 
                 # ==============================================================
                 # STEP 4: For each category, fetch pages from ReadMe.
-                # - Endpoint pages: skip — Mintlify auto-generates from spec.
+                # - Endpoint pages: match operationId, generate MDX with
+                #   absolute openapi frontmatter path.
                 # - Non-endpoint pages: fetch body from ReadMe, stage as MDX.
+                # Group-level openapi field in docs.json tells Mintlify which
+                # spec to load for the group.
                 # ==============================================================
                 version_groups = []
 
@@ -781,8 +795,10 @@ def main():
                         page_title = page.get("title", "")
                         page_slug  = page.get("slug",  "")
 
-                        # Determine if endpoint page via operationId match
-                        is_endpoint     = False
+                        # Match page to endpoint via operationId
+                        api_method      = ""
+                        api_path        = ""
+                        spec_rel_path   = None
                         normalized_slug = re.sub(r"-\d+$", "", page_slug.lower())
 
                         for slug, paths in spec_path_index.items():
@@ -792,26 +808,33 @@ def main():
                                         continue
                                     op_id = op.get("operationId", "")
                                     if op_id.lower() == page_slug.lower() or op_id.lower() == normalized_slug:
-                                        is_endpoint   = True
-                                        cat_spec_path = committed_specs[slug]
+                                        api_method    = method
+                                        api_path      = path
+                                        spec_rel_path = committed_specs[slug]
                                         break
-                                if is_endpoint:
+                                if api_path:
                                     break
-                            if is_endpoint:
+                            if api_path:
                                 break
 
-                        if is_endpoint:
-                            continue  # Mintlify auto-generates endpoint pages from spec
-
-                        # Non-endpoint — fetch body from ReadMe, stage MDX
-                        detail = get_reference_page(readme_version, page_slug, readme_key)
-                        body   = ""
-                        if detail:
-                            body = (detail.get("content") or {}).get("body") or ""
-                        mdx_content   = build_content_mdx(page_title, body)
                         mdx_filename  = slug_to_mdx_filename(page_slug)
                         mdx_repo_path = f"{API_REF_BASE}/{display_version}/{mdx_filename}"
                         mdx_nav_path  = f"/api-reference/{display_version}/{mdx_filename[:-4]}"
+
+                        if api_method and api_path and spec_rel_path:
+                            # Endpoint page — openapi frontmatter with absolute path
+                            if cat_spec_path is None:
+                                cat_spec_path = spec_rel_path
+                            mdx_content = build_endpoint_mdx(
+                                page_title, spec_rel_path, api_method, api_path
+                            )
+                        else:
+                            # Non-endpoint — fetch body from ReadMe
+                            detail = get_reference_page(readme_version, page_slug, readme_key)
+                            body   = ""
+                            if detail:
+                                body = (detail.get("content") or {}).get("body") or ""
+                            mdx_content = build_content_mdx(page_title, body)
 
                         all_files.append({"path": mdx_repo_path, "content": mdx_content})
                         nav_pages.append(mdx_nav_path)
@@ -823,7 +846,7 @@ def main():
                         group_entry["pages"] = nav_pages
                     version_groups.append(group_entry)
 
-                st.write(f"📝 Prepared **{len([f for f in all_files if f['path'].endswith('.mdx')])}** content MDX file(s)")
+                st.write(f"📝 Prepared **{len([f for f in all_files if f['path'].endswith('.mdx')])}** MDX file(s)")
                 st.success(f"✅ Processed **{len(version_groups)}** categories")
 
                 all_version_dropdowns.append({
