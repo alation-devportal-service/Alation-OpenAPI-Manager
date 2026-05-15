@@ -613,6 +613,19 @@ def main():
             help="ReadMe branch slug → canonical display version",
         )
 
+        nav_schema = st.radio(
+            "Navigation schema",
+            options=["tabs (dropdowns)", "products"],
+            index=0,
+            help=(
+                "**tabs (dropdowns):** Versions as dropdowns under API Reference tab. "
+                "Current branch schema — group-level openapi compatibility unconfirmed. "
+                "**products:** Each version as a separate top-level product. "
+                "Confirmed working on main branch."
+            ),
+            horizontal=True,
+        )
+
         # --- Debug expander ---
         with st.expander("🔬 Debug: Inspect ReadMe API responses"):
             st.caption("Inspect raw ReadMe API responses to verify field availability.")
@@ -886,25 +899,42 @@ def main():
                 docs_data = json.loads(base64.b64decode(docs_resp.json()["content"]))
                 patched   = False
 
-                # Try tabs structure (elena/testNavigationChanges schema)
-                for tab in docs_data.get("navigation", {}).get("tabs", []):
-                    if tab.get("tab") == "API Reference":
-                        for key in ["groups", "pages", "versions", "dropdowns"]:
-                            tab.pop(key, None)
-                        tab["dropdowns"] = all_version_dropdowns
-                        patched = True
-                        break
-
-                # Fall back to products structure (main branch schema)
-                if not patched:
-                    for product in docs_data.get("navigation", {}).get("products", []):
-                        if product.get("product") == "API Reference":
-                            product["groups"] = all_version_dropdowns
+                if nav_schema == "tabs (dropdowns)":
+                    # tabs + dropdowns: API Reference tab with version dropdowns
+                    for tab in docs_data.get("navigation", {}).get("tabs", []):
+                        if tab.get("tab") == "API Reference":
+                            for key in ["groups", "pages", "versions", "dropdowns"]:
+                                tab.pop(key, None)
+                            tab["dropdowns"] = all_version_dropdowns
                             patched = True
                             break
+                    if not patched:
+                        # Tab doesn't exist — create it
+                        docs_data.setdefault("navigation", {}).setdefault("tabs", []).append({
+                            "tab":       "API Reference",
+                            "dropdowns": all_version_dropdowns,
+                        })
+                        patched = True
+
+                else:
+                    # products: each version becomes a separate product
+                    # Remove existing API Reference products first
+                    products = docs_data.get("navigation", {}).get("products", [])
+                    docs_data.setdefault("navigation", {})["products"] = [
+                        p for p in products
+                        if not p.get("product", "").startswith("API Reference")
+                    ]
+                    # Add one product per version
+                    for version_data in all_version_dropdowns:
+                        display_ver = version_data["dropdown"]
+                        docs_data["navigation"]["products"].append({
+                            "product": f"API Reference {display_ver}",
+                            "groups":  version_data["groups"],
+                        })
+                    patched = True
 
                 if not patched:
-                    st.error("❌ Could not find `API Reference` in `docs.json`.")
+                    st.error("❌ Could not patch `docs.json`.")
                 else:
                     ok, put_resp = commit_file_to_branch(
                         repo          = mintlify_repo,
@@ -912,7 +942,7 @@ def main():
                         branch        = MINTLIFY_BRANCH,
                         file_path     = DOCS_JSON_PATH,
                         content_bytes = json.dumps(docs_data, indent=2).encode("utf-8"),
-                        message       = "🤖 Update docs.json API Reference for: " + ", ".join(VERSION_MAP[v] for v in selected_versions),
+                        message       = f"🤖 Update docs.json ({nav_schema}) for: " + ", ".join(VERSION_MAP[v] for v in selected_versions),
                     )
                     if ok:
                         if any_failures:
@@ -920,7 +950,8 @@ def main():
                         else:
                             st.success(
                                 f"🎉 Migration complete! All files committed to `{MINTLIFY_BRANCH}` "
-                                "in 2 commits. Mintlify will auto-deploy the branch preview shortly."
+                                f"in 2 commits using **{nav_schema}** schema. "
+                                "Mintlify will auto-deploy the branch preview shortly."
                             )
                     else:
                         st.error(f"❌ Failed to update `docs.json`: {put_resp.json().get('message', put_resp.text)}")
