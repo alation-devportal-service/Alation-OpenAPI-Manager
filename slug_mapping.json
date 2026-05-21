@@ -45,5 +45,6 @@
     "cde-public-api": "cde",
     "ocf_unified_api": "unified-ocf-source-operations-api",
     "filesystem_file": "filesystem-file-api",
-    "central_auth": "central-authentication-apis"
+    "central_auth": "central-authentication-apis",
+    "assets": "assets-api"
 }
