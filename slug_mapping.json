@@ -46,5 +46,6 @@
     "ocf_unified_api": "unified-ocf-source-operations-api",
     "filesystem_file": "filesystem-file-api",
     "central_auth": "central-authentication-apis",
-    "assets": "assets-api"
+    "assets": "assets-api",
+    "ocf_datasources_query": "ocf-datasources-query-api"
 }
