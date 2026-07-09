@@ -251,10 +251,44 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
 # OPENAPI FILE PREP
 # ---------------------------------------------------------------------------
 
+class SpecYAMLError(Exception):
+    """Raised when a spec file fails to parse as valid YAML/mapping."""
+    pass
+
+def _load_yaml_or_report(filepath):
+    """Loads a YAML file, raising SpecYAMLError with a precise line/column message on failure.
+
+    Deliberately raises (rather than calling st.error/st.stop itself) so callers can decide
+    how to handle it: single-file callers can surface it and stop, while the Tab 3 batch loop
+    can catch it, log a warning, and fall back to the next source without halting the whole run.
+    """
+    with open(filepath, "r", encoding="utf-8") as f:
+        try:
+            data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            location = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+            problem = getattr(e, "problem", str(e))
+            raise SpecYAMLError(
+                f"`{filepath.name}` is not valid YAML{location}. Problem: {problem} "
+                "(common causes: an unquoted colon inside a description/URL, a stray tab "
+                "character, or an unbalanced quote near that line)."
+            ) from e
+    if not isinstance(data, dict):
+        raise SpecYAMLError(
+            f"`{filepath.name}` parsed but its top level is a `{type(data).__name__}`, "
+            "not a mapping. Check that the file starts with `openapi:`/`info:` keys and "
+            "isn't, e.g., a list or a plain string."
+        )
+    return data
+
 def prep_openapi_file(filepath, version, target_slug):
     """For Tabs 1 & 2: writes a prepped YAML file for CLI validation/upload to ReadMe."""
-    with open(filepath, "r") as f:
-        data = yaml.safe_load(f)
+    try:
+        data = _load_yaml_or_report(filepath)
+    except SpecYAMLError as e:
+        st.error(f"❌ {e}")
+        st.stop()
     data.setdefault("info", {})["version"] = version
     data.setdefault("x-readme", {}).update({"explorer-enabled": False, "proxy-enabled": True})
     for server in data.get("servers", []):
@@ -269,11 +303,13 @@ def prep_openapi_file(filepath, version, target_slug):
     return yaml_filepath
 
 def prep_spec_content(filepath, version, readme_slug):
-    """For Tab 3: loads YAML, applies prep transformations, returns YAML bytes."""
-    with open(filepath, "r") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"YAML did not parse to a dict — got {type(data)}")
+    """For Tab 3: loads YAML, applies prep transformations, returns YAML bytes.
+
+    Raises SpecYAMLError on malformed input — the Tab 3 batch loop that calls this already
+    wraps it in try/except to log a warning and fall back to the ReadMe source, so we must
+    NOT call st.stop() here or we'd kill the whole batch run over one bad file.
+    """
+    data = _load_yaml_or_report(filepath)
     data.setdefault("info", {})["version"] = version
     data.setdefault("x-readme", {}).update({"explorer-enabled": False, "proxy-enabled": True})
     for server in data.get("servers", []):
