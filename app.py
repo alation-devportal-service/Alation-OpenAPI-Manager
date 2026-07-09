@@ -397,6 +397,45 @@ VERSION_MAP = {
 }
 
 # ---------------------------------------------------------------------------
+# $REF DEPENDENCY CHECKER
+# ---------------------------------------------------------------------------
+
+def find_missing_ref_targets(start_files, workspace_dir):
+    """Walks $ref file targets from the given spec files (and transitively, their own
+    refs) and returns a sorted list of referenced paths that don't exist on disk.
+
+    Best-effort: matches '$ref: path/to/file.yaml#/Foo' style entries via regex rather
+    than a full YAML parse (fast, and tolerant of any file that fails to parse on its
+    own). Ignores in-document '#/...' refs and http(s) refs.
+    """
+    seen = set()
+    missing = set()
+    queue = list(start_files)
+    while queue:
+        f = queue.pop()
+        if f in seen or not f.exists():
+            continue
+        seen.add(f)
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for m in re.finditer(r"\$ref:\s*['\"]?([^'\"#\s]+)", text):
+            target = m.group(1)
+            if not target or target.startswith(("http://", "https://")):
+                continue
+            target_path = (f.parent / target).resolve()
+            if not target_path.exists():
+                try:
+                    rel = target_path.relative_to(workspace_dir.resolve())
+                except ValueError:
+                    rel = target_path
+                missing.add(str(rel))
+            elif target_path.suffix.lower() in (".yaml", ".yml", ".json") and target_path not in seen:
+                queue.append(target_path)
+    return sorted(missing)
+
+# ---------------------------------------------------------------------------
 # MAIN APP
 # ---------------------------------------------------------------------------
 
@@ -455,6 +494,20 @@ def main():
             )
             if p.returncode == 0:
                 st.success("✅ Specs pulled.")
+                root_files = []
+                for sub in [path_main, path_logical]:
+                    tp = workspace_dir / sub
+                    if tp.exists():
+                        root_files.extend(tp.glob("*.yaml"))
+                missing_refs = find_missing_ref_targets(root_files, workspace_dir)
+                if missing_refs:
+                    st.warning(
+                        f"⚠️ Heads up: the following `$ref` targets are referenced by specs "
+                        f"in this clone of branch `{eng_branch}` but don't exist in it. Any "
+                        "spec that depends on one of these will fail validation with an "
+                        "ENOENT error until it's fixed on that branch:\n\n"
+                        + "\n".join(f"- `{m}`" for m in missing_refs)
+                    )
             else:
                 st.error(f"❌ Error: {p.stderr.decode()}")
 
@@ -481,73 +534,83 @@ def main():
 
         if not file_options:
             st.info("👈 Please click '1. Pull Specs' above to load files from the repository.")
+        elif npx is None:
+            st.error(
+                "❌ `npx` was not found on PATH, so validation/upload commands can't run. "
+                "This usually means Node.js failed to install — try clicking 'Reboot app' "
+                "(Streamlit Cloud → Manage app) to force a clean environment setup."
+            )
         else:
-            selected_file_name = st.selectbox("Select Spec", file_options)
-            selected_file_path = next(f for f in yaml_files if f.name == selected_file_name)
-            mapped_id   = current_mapping.get(selected_file_path.stem, "")
-            is_new_file = False
+            try:
+                selected_file_name = st.selectbox("Select Spec", file_options)
+                selected_file_path = next(f for f in yaml_files if f.name == selected_file_name)
+                mapped_id   = current_mapping.get(selected_file_path.stem, "")
+                is_new_file = False
 
-            if not mapped_id:
-                is_new_file = True
-                try:
-                    with open(selected_file_path, "r") as f:
-                        temp_data = yaml.safe_load(f)
-                    raw_title = temp_data.get("info", {}).get("title", selected_file_path.stem)
-                    mapped_id = re.sub(r"[^a-z0-9]+", "-", raw_title.lower()).strip("-")
-                except Exception:
-                    mapped_id = selected_file_path.stem
+                if not mapped_id:
+                    is_new_file = True
+                    try:
+                        with open(selected_file_path, "r") as f:
+                            temp_data = yaml.safe_load(f)
+                        raw_title = temp_data.get("info", {}).get("title", selected_file_path.stem)
+                        mapped_id = re.sub(r"[^a-z0-9]+", "-", raw_title.lower()).strip("-")
+                    except Exception:
+                        mapped_id = selected_file_path.stem
 
-            col1, col2 = st.columns(2)
-            col1.info(f"**Original File:** `{selected_file_name}`")
-            if is_new_file:
-                col2.warning(f"**Auto-Generated Slug:** `{mapped_id}`")
-            elif mapped_id:
-                col2.success(f"**Mapped Slug:** `{mapped_id}`")
+                col1, col2 = st.columns(2)
+                col1.info(f"**Original File:** `{selected_file_name}`")
+                if is_new_file:
+                    col2.warning(f"**Auto-Generated Slug:** `{mapped_id}`")
+                elif mapped_id:
+                    col2.success(f"**Mapped Slug:** `{mapped_id}`")
 
-            final_id = st.text_input("Target ReadMe Slug (Filename):", value=mapped_id)
+                final_id = st.text_input("Target ReadMe Slug (Filename):", value=mapped_id)
 
-            st.divider()
-            st.subheader("🚀 3. Choose Action")
-            col_v, col_u = st.columns(2)
+                st.divider()
+                st.subheader("🚀 3. Choose Action")
+                col_v, col_u = st.columns(2)
 
-            with col_v:
-                if st.button("🔍 Run Validations Only"):
-                    prepped = prep_openapi_file(selected_file_path, target_version, final_id)
-                    abs_cwd = str(prepped.parent.resolve())
-                    st.write("### 🔍 Logs")
-                    run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                    run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-
-            with col_u:
-                if st.button("☁️ Validate & Upload", type="primary"):
-                    if not final_id.strip():
-                        st.error("❌ Target ReadMe Slug cannot be empty.")
-                    else:
+                with col_v:
+                    if st.button("🔍 Run Validations Only"):
                         prepped = prep_openapi_file(selected_file_path, target_version, final_id)
                         abs_cwd = str(prepped.parent.resolve())
                         st.write("### 🔍 Logs")
-                        v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                        v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-                        if v2 == 0:
-                            if v1 != 0:
-                                st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
-                            else:
-                                st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
-                            upload_cmd = (
-                                f"{npx} --yes rdme openapi upload {prepped.name} "
-                                f"--key {readme_key} --slug {final_id}.json --branch {target_version}"
-                            )
-                            if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
-                                st.success("🎉 Successfully uploaded to ReadMe!")
-                                if is_new_file:
-                                    with st.spinner("Pushing new slug to App repo..."):
-                                        current_mapping[selected_file_path.stem] = final_id
-                                        if save_slug_mapping(app_repo_name, svc_git_token, current_mapping, current_sha):
-                                            st.success(f"📝 Added `'{selected_file_path.stem}': '{final_id}'` to `slug_mapping.json`.")
-                                        else:
-                                            st.warning("⚠️ Upload succeeded, but failed to save the mapping.")
-                            else:
-                                st.error("❌ Upload failed. See logs above.")
+                        run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                        run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+
+                with col_u:
+                    if st.button("☁️ Validate & Upload", type="primary"):
+                        if not final_id.strip():
+                            st.error("❌ Target ReadMe Slug cannot be empty.")
+                        else:
+                            prepped = prep_openapi_file(selected_file_path, target_version, final_id)
+                            abs_cwd = str(prepped.parent.resolve())
+                            st.write("### 🔍 Logs")
+                            v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                            v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+                            if v2 == 0:
+                                if v1 != 0:
+                                    st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
+                                else:
+                                    st.success(f"✅ Validations passed. Uploading as `{prepped.name}`...")
+                                upload_cmd = (
+                                    f"{npx} --yes rdme openapi upload {prepped.name} "
+                                    f"--key {readme_key} --slug {final_id}.json --branch {target_version}"
+                                )
+                                if run_command_ui(upload_cmd, cwd=abs_cwd, mask_secrets=[readme_key]) == 0:
+                                    st.success("🎉 Successfully uploaded to ReadMe!")
+                                    if is_new_file:
+                                        with st.spinner("Pushing new slug to App repo..."):
+                                            current_mapping[selected_file_path.stem] = final_id
+                                            if save_slug_mapping(app_repo_name, svc_git_token, current_mapping, current_sha):
+                                                st.success(f"📝 Added `'{selected_file_path.stem}': '{final_id}'` to `slug_mapping.json`.")
+                                            else:
+                                                st.warning("⚠️ Upload succeeded, but failed to save the mapping.")
+                                else:
+                                    st.error("❌ Upload failed. See logs above.")
+            except Exception as e:
+                st.error("❌ Something failed while rendering the spec-selection/action panel below:")
+                st.exception(e)
 
     # =========================================================================
     # TAB 2 — MANUAL FILE UPLOAD
