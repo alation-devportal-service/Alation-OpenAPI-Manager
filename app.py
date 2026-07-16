@@ -282,13 +282,69 @@ def _load_yaml_or_report(filepath):
         )
     return data
 
-def prep_openapi_file(filepath, version, target_slug):
+def fix_broken_file_refs(data, filepath, workspace_dir):
+    """Recursively walks a parsed OpenAPI dict/list structure and repairs any
+    file-relative `$ref` whose target doesn't exist on disk relative to `filepath`.
+
+    Engineering-owned spec files sometimes ship with the wrong number of `../`
+    segments (e.g. copy-pasted from a spec one directory level deeper/shallower).
+    Rather than failing validation with a raw ENOENT, search the cloned
+    `workspace_dir` for a file with the same basename and, if exactly one match
+    is found, rewrite the ref to the correct relative path. Mutates `data` in
+    place. Returns a list of human-readable strings describing what was fixed
+    or what couldn't be resolved, for display via st.info/st.warning.
+    """
+    notes = []
+
+    def split_ref(ref_value):
+        if "#" in ref_value:
+            file_part, _, anchor = ref_value.partition("#")
+            return file_part, "#" + anchor
+        return ref_value, ""
+
+    def walk(node):
+        if isinstance(node, dict):
+            ref_val = node.get("$ref")
+            if isinstance(ref_val, str) and ref_val and not ref_val.startswith(("http://", "https://", "#")):
+                file_part, anchor = split_ref(ref_val)
+                target_path = (filepath.parent / file_part).resolve()
+                if not target_path.exists():
+                    basename   = Path(file_part).name
+                    candidates = [c for c in workspace_dir.rglob(basename) if c.is_file()]
+                    if len(candidates) == 1:
+                        new_rel = os.path.relpath(candidates[0], start=filepath.parent).replace(os.sep, "/")
+                        node["$ref"] = new_rel + anchor
+                        notes.append(f"🔧 Fixed broken ref `{ref_val}` → `{new_rel}{anchor}`")
+                    elif len(candidates) > 1:
+                        notes.append(
+                            f"⚠️ Ref `{ref_val}` doesn't resolve and matched {len(candidates)} "
+                            f"files named `{basename}` in the repo — left as-is, please fix manually."
+                        )
+                    else:
+                        notes.append(
+                            f"⚠️ Ref `{ref_val}` doesn't resolve and no file named `{basename}` "
+                            "was found anywhere in the cloned repo — left as-is."
+                        )
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return notes
+
+def prep_openapi_file(filepath, version, target_slug, workspace_dir=None):
     """For Tabs 1 & 2: writes a prepped YAML file for CLI validation/upload to ReadMe."""
     try:
         data = _load_yaml_or_report(filepath)
     except SpecYAMLError as e:
         st.error(f"❌ {e}")
         st.stop()
+    if workspace_dir is not None:
+        ref_notes = fix_broken_file_refs(data, filepath, workspace_dir)
+        for note in ref_notes:
+            (st.warning if note.startswith("⚠️") else st.info)(note)
     data.setdefault("info", {})["version"] = version
     data.setdefault("x-readme", {}).update({"explorer-enabled": False, "proxy-enabled": True})
     for server in data.get("servers", []):
@@ -302,7 +358,7 @@ def prep_openapi_file(filepath, version, target_slug):
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
     return yaml_filepath
 
-def prep_spec_content(filepath, version, readme_slug):
+def prep_spec_content(filepath, version, readme_slug, workspace_dir=None):
     """For Tab 3: loads YAML, applies prep transformations, returns YAML bytes.
 
     Raises SpecYAMLError on malformed input — the Tab 3 batch loop that calls this already
@@ -310,6 +366,10 @@ def prep_spec_content(filepath, version, readme_slug):
     NOT call st.stop() here or we'd kill the whole batch run over one bad file.
     """
     data = _load_yaml_or_report(filepath)
+    if workspace_dir is not None:
+        ref_notes = fix_broken_file_refs(data, filepath, workspace_dir)
+        for note in ref_notes:
+            (st.warning if note.startswith("⚠️") else st.info)(note)
     data.setdefault("info", {})["version"] = version
     data.setdefault("x-readme", {}).update({"explorer-enabled": False, "proxy-enabled": True})
     for server in data.get("servers", []):
@@ -572,7 +632,7 @@ def main():
 
                 with col_v:
                     if st.button("🔍 Run Validations Only"):
-                        prepped = prep_openapi_file(selected_file_path, target_version, final_id)
+                        prepped = prep_openapi_file(selected_file_path, target_version, final_id, workspace_dir)
                         abs_cwd = str(prepped.parent.resolve())
                         st.write("### 🔍 Logs")
                         run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
@@ -583,7 +643,7 @@ def main():
                         if not final_id.strip():
                             st.error("❌ Target ReadMe Slug cannot be empty.")
                         else:
-                            prepped = prep_openapi_file(selected_file_path, target_version, final_id)
+                            prepped = prep_openapi_file(selected_file_path, target_version, final_id, workspace_dir)
                             abs_cwd = str(prepped.parent.resolve())
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
@@ -653,7 +713,7 @@ def main():
                 col_mv, col_mu = st.columns(2)
                 with col_mv:
                     if st.button("🔍 Validate Custom Spec"):
-                        manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id)
+                        manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id, workspace_dir)
                         abs_cwd        = str(manual_prepped.parent.resolve())
                         st.write("### 🔍 Logs")
                         run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
@@ -664,7 +724,7 @@ def main():
                         if not manual_final_id.strip():
                             st.error("❌ Target ReadMe Slug cannot be empty.")
                         else:
-                            manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id)
+                            manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id, workspace_dir)
                             abs_cwd        = str(manual_prepped.parent.resolve())
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
@@ -836,7 +896,7 @@ def main():
                                 candidate = workspace_dir / spec_dir / f"{eng_key}.yaml"
                                 if candidate.exists():
                                     try:
-                                        spec_content = prep_spec_content(candidate, display_version, readme_slug)
+                                        spec_content = prep_spec_content(candidate, display_version, readme_slug, workspace_dir)
                                         used_source  = f"{eng_key}.yaml"
                                     except Exception as e:
                                         st.error(f"❌ `{readme_slug}`: prep failed — {e}")
