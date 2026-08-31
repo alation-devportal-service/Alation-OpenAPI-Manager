@@ -496,6 +496,32 @@ def find_missing_ref_targets(start_files, workspace_dir):
     return sorted(missing)
 
 # ---------------------------------------------------------------------------
+# UPSTREAM YAML WORKAROUNDS
+# ---------------------------------------------------------------------------
+
+def patch_known_upstream_yaml_bugs(workspace_dir, path_main):
+    """Temporary workaround for a known bug in the engineering repo's
+    common/responses.yaml: several `detail` example strings wrap onto a second,
+    under-indented line, which fails strict YAML 1.2 parsing (rdme) even though
+    it passes swagger-cli's lenient parser. Collapses each wrapped string onto
+    one line -- semantically identical, since YAML already folds that line break
+    into a single space. Safe to leave in place: it's a no-op once the upstream
+    fix merges. Remove once it does, to avoid the workaround outliving its reason.
+    """
+    target = workspace_dir / path_main / "common" / "responses.yaml"
+    if not target.exists():
+        return False
+    text = target.read_text(encoding="utf-8")
+    patched, n = re.subn(
+        r'(detail: "[^"\n]*)\n\s+(\(Refer[^"\n]*")',
+        r'\1 \2',
+        text,
+    )
+    if n:
+        target.write_text(patched, encoding="utf-8")
+    return n > 0
+
+# ---------------------------------------------------------------------------
 # MAIN APP
 # ---------------------------------------------------------------------------
 
@@ -554,6 +580,13 @@ def main():
             )
             if p.returncode == 0:
                 st.success("✅ Specs pulled.")
+                if patch_known_upstream_yaml_bugs(workspace_dir, path_main):
+                    st.info(
+                        "🩹 Applied temporary workaround for a known YAML indentation "
+                        "bug in `common/responses.yaml` (fails strict rdme validation). "
+                        "Remove `patch_known_upstream_yaml_bugs` once the upstream fix "
+                        "merges into the engineering repo."
+                    )
                 root_files = []
                 for sub in [path_main, path_logical]:
                     tp = workspace_dir / sub
