@@ -711,11 +711,11 @@ def main():
 
                 st.divider()
                 st.subheader("🚀 3. Choose Action")
-                validator_choice = st.radio(
-                    "Validator (for 'Run Validations Only' — 'Validate & Upload' always also "
-                    "runs ReadMe's own validators, since that's what the upload itself requires)",
-                    ["ReadMe (swagger-cli + rdme)", "Mintlify (mint validate)", "Both"],
-                    horizontal=True, key="validator_choice_git",
+                validator_choice = st.multiselect(
+                    "Validators (for 'Run Validations Only' — 'Validate & Upload' always also "
+                    "runs swagger-cli + rdme, since that's what the upload itself requires)",
+                    ["swagger-cli", "rdme", "Mintlify (mint validate)"],
+                    default=["swagger-cli", "rdme"], key="validator_choice_git",
                 )
                 col_v, col_u = st.columns(2)
 
@@ -724,10 +724,11 @@ def main():
                         prepped = prep_openapi_file(selected_file_path, target_version, final_id, workspace_dir)
                         abs_cwd = str(prepped.parent.resolve())
                         st.write("### 🔍 Logs")
-                        if validator_choice != "Mintlify (mint validate)":
+                        if "swagger-cli" in validator_choice:
                             run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                        if "rdme" in validator_choice:
                             run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-                        if validator_choice != "ReadMe (swagger-cli + rdme)":
+                        if "Mintlify (mint validate)" in validator_choice:
                             st.write("**Mintlify validation** (throwaway scaffold — no clone, no push, nothing touched in the real docs repo):")
                             if run_mintlify_validation(prepped) == 0:
                                 st.success("✅ Mintlify (`mint validate`) passed.")
@@ -744,7 +745,7 @@ def main():
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
                             v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
-                            if validator_choice != "ReadMe (swagger-cli + rdme)":
+                            if "Mintlify (mint validate)" in validator_choice:
                                 st.write("**Mintlify validation** (informational — never blocks this upload):")
                                 if run_mintlify_validation(prepped) == 0:
                                     st.success("✅ Mintlify (`mint validate`) passed.")
@@ -814,11 +815,11 @@ def main():
 
                 manual_final_id = st.text_input("Target ReadMe Slug (Manual):", value=manual_mapped_id, key="manual_slug_input")
 
-                validator_choice_manual = st.radio(
-                    "Validator (for 'Validate Custom Spec' — 'Validate & Upload' always also "
-                    "runs ReadMe's own validators, since that's what the upload itself requires)",
-                    ["ReadMe (swagger-cli + rdme)", "Mintlify (mint validate)", "Both"],
-                    horizontal=True, key="validator_choice_manual",
+                validator_choice_manual = st.multiselect(
+                    "Validators (for 'Validate Custom Spec' — 'Validate & Upload' always also "
+                    "runs swagger-cli + rdme, since that's what the upload itself requires)",
+                    ["swagger-cli", "rdme", "Mintlify (mint validate)"],
+                    default=["swagger-cli", "rdme"], key="validator_choice_manual",
                 )
                 col_mv, col_mu = st.columns(2)
                 with col_mv:
@@ -826,10 +827,11 @@ def main():
                         manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id, workspace_dir)
                         abs_cwd        = str(manual_prepped.parent.resolve())
                         st.write("### 🔍 Logs")
-                        if validator_choice_manual != "Mintlify (mint validate)":
+                        if "swagger-cli" in validator_choice_manual:
                             run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
+                        if "rdme" in validator_choice_manual:
                             run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
-                        if validator_choice_manual != "ReadMe (swagger-cli + rdme)":
+                        if "Mintlify (mint validate)" in validator_choice_manual:
                             st.write("**Mintlify validation** (throwaway scaffold — no clone, no push, nothing touched in the real docs repo):")
                             if run_mintlify_validation(manual_prepped) == 0:
                                 st.success("✅ Mintlify (`mint validate`) passed.")
@@ -846,7 +848,7 @@ def main():
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
                             v2 = run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
-                            if validator_choice_manual != "ReadMe (swagger-cli + rdme)":
+                            if "Mintlify (mint validate)" in validator_choice_manual:
                                 st.write("**Mintlify validation** (informational — never blocks this upload):")
                                 if run_mintlify_validation(manual_prepped) == 0:
                                     st.success("✅ Mintlify (`mint validate`) passed.")
