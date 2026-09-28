@@ -248,6 +248,56 @@ def run_command_ui(cmd_string, cwd=None, mask_secrets=[]):
     return process.returncode
 
 # ---------------------------------------------------------------------------
+# MINTLIFY VALIDATOR
+# ---------------------------------------------------------------------------
+
+MINT_VALIDATE_WORKSPACE = Path("./temp_mint_validate_workspace")
+
+def run_mintlify_validation(spec_filepath):
+    """Validates spec_filepath against Mintlify's own OpenAPI validator
+    (`mint validate`) -- installed on demand via `npx --yes mint@latest`,
+    the same on-demand pattern already used for swagger-cli/rdme (confirmed
+    a real, publicly published npm package -- 'The Mintlify CLI' -- so this
+    works on a fresh machine with no pre-install, same as Streamlit Cloud).
+
+    Deliberately does NOT clone the real acs-docs-mintlify repo or touch
+    any branch there. `mint validate` has no single-file mode -- it always
+    validates a whole Mintlify project -- but a full project isn't needed
+    to check one spec's OpenAPI schema validity: a throwaway, minimal
+    scaffold (a fixed docs.json plus this one spec, wired in via a
+    group-level 'openapi' field, which validates every operation in the
+    file, not just one) is enough. Confirmed directly: this exact scaffold
+    surfaces the same schema error mint validate gives inside the real
+    repo, and passes clean for a spec with no such issue.
+
+    Builds the scaffold fresh in its own temp workspace on every call,
+    tears it down afterward either way, and returns mint's exit code
+    (0 = passed)."""
+    if MINT_VALIDATE_WORKSPACE.exists():
+        shutil.rmtree(MINT_VALIDATE_WORKSPACE)
+    openapi_dir = MINT_VALIDATE_WORKSPACE / "openapi"
+    openapi_dir.mkdir(parents=True)
+    scaffold_spec_name = spec_filepath.name
+    shutil.copy(spec_filepath, openapi_dir / scaffold_spec_name)
+    docs_json = {
+        "$schema": "https://mintlify.com/docs.json",
+        "name": "Standalone Validator",
+        "theme": "mint",
+        "colors": {"primary": "#000000"},
+        "navigation": {
+            "tabs": [{
+                "tab": "API",
+                "groups": [{"group": "Validation", "openapi": f"openapi/{scaffold_spec_name}"}],
+            }],
+        },
+    }
+    (MINT_VALIDATE_WORKSPACE / "docs.json").write_text(json.dumps(docs_json, indent=2))
+    try:
+        return run_command_ui("npx --yes mint@latest validate", cwd=str(MINT_VALIDATE_WORKSPACE.resolve()))
+    finally:
+        shutil.rmtree(MINT_VALIDATE_WORKSPACE, ignore_errors=True)
+
+# ---------------------------------------------------------------------------
 # OPENAPI FILE PREP
 # ---------------------------------------------------------------------------
 
@@ -661,6 +711,12 @@ def main():
 
                 st.divider()
                 st.subheader("🚀 3. Choose Action")
+                validator_choice = st.radio(
+                    "Validator (for 'Run Validations Only' — 'Validate & Upload' always also "
+                    "runs ReadMe's own validators, since that's what the upload itself requires)",
+                    ["ReadMe (swagger-cli + rdme)", "Mintlify (mint validate)", "Both"],
+                    horizontal=True, key="validator_choice_git",
+                )
                 col_v, col_u = st.columns(2)
 
                 with col_v:
@@ -668,8 +724,15 @@ def main():
                         prepped = prep_openapi_file(selected_file_path, target_version, final_id, workspace_dir)
                         abs_cwd = str(prepped.parent.resolve())
                         st.write("### 🔍 Logs")
-                        run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
-                        run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+                        if validator_choice != "Mintlify (mint validate)":
+                            run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
+                            run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+                        if validator_choice != "ReadMe (swagger-cli + rdme)":
+                            st.write("**Mintlify validation** (throwaway scaffold — no clone, no push, nothing touched in the real docs repo):")
+                            if run_mintlify_validation(prepped) == 0:
+                                st.success("✅ Mintlify (`mint validate`) passed.")
+                            else:
+                                st.error("❌ Mintlify (`mint validate`) failed. See logs above.")
 
                 with col_u:
                     if st.button("☁️ Validate & Upload", type="primary"):
@@ -681,6 +744,14 @@ def main():
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {prepped.name}", cwd=abs_cwd)
                             v2 = run_command_ui(f"{npx} --yes rdme openapi validate {prepped.name}", cwd=abs_cwd)
+                            if validator_choice != "ReadMe (swagger-cli + rdme)":
+                                st.write("**Mintlify validation** (informational — never blocks this upload):")
+                                if run_mintlify_validation(prepped) == 0:
+                                    st.success("✅ Mintlify (`mint validate`) passed.")
+                                else:
+                                    st.warning("⚠️ Mintlify (`mint validate`) failed — the spec has a schema issue Mintlify's validator "
+                                               "catches that ReadMe's doesn't. Uploading to ReadMe anyway (per your choice, this doesn't block "
+                                               "it), but this will need fixing before it can ever be ported to the Mintlify docs.")
                             if v2 == 0:
                                 if v1 != 0:
                                     st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
@@ -743,14 +814,27 @@ def main():
 
                 manual_final_id = st.text_input("Target ReadMe Slug (Manual):", value=manual_mapped_id, key="manual_slug_input")
 
+                validator_choice_manual = st.radio(
+                    "Validator (for 'Validate Custom Spec' — 'Validate & Upload' always also "
+                    "runs ReadMe's own validators, since that's what the upload itself requires)",
+                    ["ReadMe (swagger-cli + rdme)", "Mintlify (mint validate)", "Both"],
+                    horizontal=True, key="validator_choice_manual",
+                )
                 col_mv, col_mu = st.columns(2)
                 with col_mv:
                     if st.button("🔍 Validate Custom Spec"):
                         manual_prepped = prep_openapi_file(manual_path, target_version, manual_final_id, workspace_dir)
                         abs_cwd        = str(manual_prepped.parent.resolve())
                         st.write("### 🔍 Logs")
-                        run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
-                        run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
+                        if validator_choice_manual != "Mintlify (mint validate)":
+                            run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
+                            run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
+                        if validator_choice_manual != "ReadMe (swagger-cli + rdme)":
+                            st.write("**Mintlify validation** (throwaway scaffold — no clone, no push, nothing touched in the real docs repo):")
+                            if run_mintlify_validation(manual_prepped) == 0:
+                                st.success("✅ Mintlify (`mint validate`) passed.")
+                            else:
+                                st.error("❌ Mintlify (`mint validate`) failed. See logs above.")
 
                 with col_mu:
                     if st.button("☁️ Validate & Upload Custom Spec", type="primary"):
@@ -762,6 +846,14 @@ def main():
                             st.write("### 🔍 Logs")
                             v1 = run_command_ui(f"{npx} --yes swagger-cli validate {manual_prepped.name}", cwd=abs_cwd)
                             v2 = run_command_ui(f"{npx} --yes rdme openapi validate {manual_prepped.name}", cwd=abs_cwd)
+                            if validator_choice_manual != "ReadMe (swagger-cli + rdme)":
+                                st.write("**Mintlify validation** (informational — never blocks this upload):")
+                                if run_mintlify_validation(manual_prepped) == 0:
+                                    st.success("✅ Mintlify (`mint validate`) passed.")
+                                else:
+                                    st.warning("⚠️ Mintlify (`mint validate`) failed — the spec has a schema issue Mintlify's validator "
+                                               "catches that ReadMe's doesn't. Uploading to ReadMe anyway (per your choice, this doesn't block "
+                                               "it), but this will need fixing before it can ever be ported to the Mintlify docs.")
                             if v2 == 0:
                                 if v1 != 0:
                                     st.warning("⚠️ Swagger-CLI flagged issues, but ReadMe validation passed. Proceeding...")
