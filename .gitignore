@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Runtime/workspace artifacts created by app.py -- never meant to be committed
+node_runtime/
+node.tar.xz
+temp_eng_workspace/
+temp_mint_validate_workspace/
