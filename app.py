@@ -94,8 +94,17 @@ def apply_alation_theme():
        specificity than a plain tag selector) still loses to the more
        specific rules below rather than to this one. Confirmed necessary:
        a plain `h1, h2, h3 {{...}}` rule here was silently outweighed by
-       Streamlit's own heading CSS and never took effect at all. */
-    * {{
+       Streamlit's own heading CSS and never took effect at all.
+
+       Icon elements are explicitly excluded -- Streamlit renders its own
+       icons (e.g. the file-uploader's upload icon) via Google's Material
+       Symbols, an ICON FONT: specific words like "upload" aren't
+       literal text there, they're the exact string that font's glyph
+       table maps to an icon shape. Forcing Inter onto those elements
+       breaks that mapping and the literal word renders instead of the
+       icon -- confirmed real: exactly this happened to the file
+       uploader's icon, showing "upload" as visible overlapping text. */
+    *:not([data-testid*="Icon"]):not([class*="material"]):not(svg):not(svg *) {{
         font-family: 'Inter', sans-serif !important;
     }}
 
