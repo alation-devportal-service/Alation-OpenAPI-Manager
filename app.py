@@ -87,17 +87,28 @@ def apply_alation_theme():
         --altn-highlight-end: #FF9901;
     }}
 
-    /* Body & UI -- Inter, per the Brandguide's Paragraph/Body Small specs */
-    html, body, [class^="st-"], .stApp, .stMarkdown,
-    p, span, div, label, input, textarea, button {{
+    /* Body & UI -- Inter, per the Brandguide's Paragraph/Body Small specs.
+       The universal selector is deliberate: it has the LOWEST possible
+       specificity, so Streamlit's own theme CSS (which targets headings
+       and code via its internal data-testid wrappers, at higher
+       specificity than a plain tag selector) still loses to the more
+       specific rules below rather than to this one. Confirmed necessary:
+       a plain `h1, h2, h3 {{...}}` rule here was silently outweighed by
+       Streamlit's own heading CSS and never took effect at all. */
+    * {{
         font-family: 'Inter', sans-serif !important;
     }}
 
     /* Headings -- Redaction, per the Brandguide's Headline spec
        (letter-spacing/line-height matches exactly; size is left to each
        heading level's own context rather than the brand's 96pt display
-       size, which is a marketing-page treatment, not a tool-UI one) */
-    h1, h2, h3 {{
+       size, which is a marketing-page treatment, not a tool-UI one).
+       Both the bare tag and Streamlit's actual wrapper testids are
+       targeted, since which one wins varies by Streamlit version. */
+    h1, h2, h3,
+    [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stHeading"] h1, [data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
+    [data-testid="stHeadingWithActionElements"] h1, [data-testid="stHeadingWithActionElements"] h2, [data-testid="stHeadingWithActionElements"] h3 {{
         font-family: 'Redaction', serif !important;
         letter-spacing: -0.02em;
         line-height: 92%;
@@ -108,7 +119,9 @@ def apply_alation_theme():
        asset package (design hasn't provided the files yet); named here
        so it's picked up automatically if a system/future copy exists,
        falling back to a standard monospace stack otherwise. */
-    code, pre {{
+    code, pre, kbd, samp,
+    [data-testid="stMarkdownContainer"] code, [data-testid="stMarkdownContainer"] pre,
+    [data-testid="stText"], [data-testid="stCodeBlock"] {{
         font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace !important;
     }}
 
@@ -520,7 +533,7 @@ def main():
     ensure_node_installed()
     apply_alation_theme()
     render_alation_header()
-    st.title("Alation OpenAPI Manager")
+    st.title("OpenAPI Manager")
 
     # --- Secrets ---
     readme_key    = st.secrets.get("README_API_KEY", "")
