@@ -710,13 +710,12 @@ def main():
                     except Exception:
                         mapped_id = selected_file_path.stem
 
-                col1, col2 = st.columns(2)
                 if is_new_file:
-                    col1.warning(f"**Auto-Generated Slug:** `{mapped_id}`")
+                    st.caption(f"⚠️ Auto-generated slug (not yet in the mapping): `{mapped_id}`")
                 elif mapped_id:
-                    col1.success(f"**Mapped Slug:** `{mapped_id}`")
-                final_id       = col2.text_input("Target ReadMe Slug:", value=mapped_id)
-                target_version = st.text_input("ReadMe Version", value=st.session_state.get("readme_version_git", "v2026.5.0-0"), key="readme_version_git")
+                    st.caption(f"✅ Mapped slug: `{mapped_id}`")
+                final_id       = st.text_input("Target ReadMe Slug:", value=mapped_id)
+                target_version = st.text_input("ReadMe Version", value=st.session_state.get("readme_version_git", "2026.5.0-0"), key="readme_version_git")
 
                 if st.button("☁️ Upload to ReadMe", type="primary"):
                     if not final_id.strip():
@@ -821,13 +820,12 @@ def main():
                     except Exception:
                         manual_mapped_id = manual_path.stem
 
-                col_m1, col_m2 = st.columns(2)
                 if is_manual_new:
-                    col_m1.warning(f"**Auto-Generated Slug:** `{manual_mapped_id}`")
+                    st.caption(f"⚠️ Auto-generated slug (not yet in the mapping): `{manual_mapped_id}`")
                 else:
-                    col_m1.success(f"**Mapped Slug:** `{manual_mapped_id}`")
-                manual_final_id      = col_m2.text_input("Target ReadMe Slug:", value=manual_mapped_id, key="manual_slug_input")
-                manual_target_version = st.text_input("ReadMe Version", value=st.session_state.get("readme_version_manual", "v2026.5.0-0"), key="readme_version_manual")
+                    st.caption(f"✅ Mapped slug: `{manual_mapped_id}`")
+                manual_final_id      = st.text_input("Target ReadMe Slug:", value=manual_mapped_id, key="manual_slug_input")
+                manual_target_version = st.text_input("ReadMe Version", value=st.session_state.get("readme_version_manual", "2026.5.0-0"), key="readme_version_manual")
 
                 if st.button("☁️ Upload to ReadMe", type="primary", key="upload_manual"):
                     if not manual_final_id.strip():
