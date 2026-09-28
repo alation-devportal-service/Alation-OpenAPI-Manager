@@ -1,0 +1,13 @@
+# Alation brand theme -- colors confirmed directly from the official logo
+# SVGs (see assets/ + README's brand-audit note), not the Brandguide PDF,
+# which currently has a wrong value for Graphite (lists it as #9FA1B2,
+# duplicating Napkin; the real value taken from the SVG fill is #14141A).
+# Fonts (Inter/Redaction) are handled separately via injected CSS in
+# app.py's apply_alation_theme(), not here -- config.toml's font-face
+# support varies by Streamlit version; the CSS injection works on all of
+# them and keeps font loading self-contained (no external host needed).
+[theme]
+primaryColor = "#FF9900"
+backgroundColor = "#F9F9FB"
+secondaryBackgroundColor = "#E7E7EE"
+textColor = "#14141A"

@@ -13,6 +13,15 @@ This tool integrates directly with GitHub to pull your engineering repositories,
 * **Manual File Override:** Upload a locally modified YAML file while preserving the Git repository context, ensuring multi-file `$ref` dependencies still resolve perfectly.
 * **Pre-processing:** Automatically preps your OpenAPI files before upload (e.g., disabling ReadMe's default explorer, enforcing HTTPS, and injecting the correct base URLs).
 
+## 🎨 Branding
+
+The app UI uses Alation's actual brand assets, not a generic Streamlit theme:
+- **`assets/fonts/`** — Inter (Body & UI) and Redaction (Headings), the real font files (see each font's `-OFL.txt` for license), embedded directly in `app.py` as base64 `@font-face` rules — no external font host needed.
+- **`assets/Alation-Logo-Primary-Black.svg`** / **`Alation-Favicon-Black.png`** — the real logo and favicon, rendered above the title and set as the browser tab icon.
+- **`.streamlit/config.toml`** — the brand color palette (Whiteboard/Chalk/Graphite/Alation Orange).
+
+Colors are confirmed from the official logo SVGs' fill values, not the Brandguide PDF — that PDF currently lists Graphite as `#9FA1B2` (a duplicate of Napkin) by mistake; the real value is `#14141A`. Worth flagging to whoever owns that PDF. Geist Mono (the Brandguide's "Tech Data" font, used for CLI log output) isn't in this asset package yet — `app.py` names it in the font stack so it picks up automatically if design provides it later, falling back to a standard monospace font until then.
+
 ## 📋 Prerequisites
 
 * **Python:** 3.8+
@@ -41,18 +50,37 @@ This tool integrates directly with GitHub to pull your engineering repositories,
    # ReadMe API Configuration
    README_API_KEY = "your_readme_api_key_here"
 
-   # Git PAT for pulling the Engineering repository (Specs)
+   # Git PAT for pulling the Engineering repository (Specs), and for the
+   # Service Account that updates slug_mapping.json in this App's repo.
+   # Skip these two if you configure the GitHub App secrets below instead --
+   # see "GitHub auth" underneath.
    GIT_USER = "your_github_username"
    GIT_TOKEN = "your_personal_access_token"
+   SVC_GIT_TOKEN = "your_service_account_github_token"
+
    ENG_REPO_URL = "[https://github.com/your-org/engineering-repo.git](https://github.com/your-org/engineering-repo.git)"
 
    # Engineering repo paths to search for YAML files
    PATH_SPECS_MAIN = "django/static/swagger/specs"
    PATH_SPECS_LOGICAL = "django/static/swagger/specs/logical_metadata"
-   
-   # Service Account for updating slug_mapping.json in this App's repo
-   SVC_GIT_TOKEN = "your_service_account_github_token"
+
    APP_REPO_NAME = "your-org/this-app-repo-name"
+
+   # --- GitHub auth (optional, replaces GIT_TOKEN/SVC_GIT_TOKEN above) ---
+   # A GitHub App's installation token instead of a personal access token --
+   # short-lived (~1hr), scoped to just the repos the App is installed on,
+   # not tied to a person. One App installation is assumed to cover both
+   # ENG_REPO_URL and APP_REPO_NAME. If set, these take priority over
+   # GIT_TOKEN/SVC_GIT_TOKEN above; if left out entirely, the PAT fields
+   # above are used exactly as before -- this is a drop-in replacement, not
+   # a breaking change.
+   GITHUB_APP_ID = "your_github_app_id"
+   GITHUB_APP_INSTALLATION_ID = "your_installation_id"
+   GITHUB_APP_PRIVATE_KEY = """
+   -----BEGIN RSA PRIVATE KEY-----
+   ...
+   -----END RSA PRIVATE KEY-----
+   """
    ```
 ## 💻 Usage
   Run the Streamlit app locally:
